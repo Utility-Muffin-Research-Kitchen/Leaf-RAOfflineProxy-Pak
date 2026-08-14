@@ -174,13 +174,18 @@ static int raproxy_read_tracks(chd_file *chd, raproxy_chd_track *tracks,
         abs_sector += (uint32_t)pregap + (uint32_t)frames;
 
         chd_frame += (uint32_t)pregap + (uint32_t)frames;
-        if (pad >= 0) {
-            /* GD-ROM states its padding rather than implying it. */
-            chd_frame += (uint32_t)pad;
-        } else {
+        if (pad < 0) {
+            /* Ordinary CD: tracks are padded up to a 4-frame boundary. */
             chd_frame = (chd_frame + RAPROXY_CHD_TRACK_PADDING - 1) /
                         RAPROXY_CHD_TRACK_PADDING * RAPROXY_CHD_TRACK_PADDING;
         }
+        /* GD-ROM (pad >= 0) advances neither counter by PAD. Crazy Taxi
+         * declares PAD:150 and PAD:43874, yet its high-density IP.BIN sits at
+         * frame 45000 -- exactly 600 + 44400, the frame counts alone. Applying
+         * PAD to the CHD offset put track 3 at 89024, and applying it to the
+         * LBA would break the filesystem lookup too: ISO9660 directory records
+         * in the high-density area address LBA 45000 upward, so the CHD frame
+         * and the LBA have to coincide here. */
         count++;
     }
 
