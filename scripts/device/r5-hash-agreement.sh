@@ -30,6 +30,12 @@ KNOWN_GOOD = [
      "a6fc42bd5d19e36e5d8a2d8c4f4e9d23"),
     ("/mnt/sdcard/Roms/FC/Super Mario Bros. (World).zip", "FC",
      "8e3630186e35d477231bf8fd50e54cdd"),
+    # CHD discs, on two different CD formats: track layouts differ enough
+    # between them that one sample could pass by luck.
+    ("/mnt/sdcard/Roms/SEGACD/Dark Wizard (USA).chd", "SEGACD",
+     "6a480004891ae5d942e62afdbbbd1b52"),
+    ("/mnt/sdcard/Roms/PS/Spyro the Dragon (USA).chd", "PS",
+     "3e9eb765a7b2912e60c30f363f0a3574"),
 ]
 
 hasher = RomHasher()

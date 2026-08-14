@@ -36,6 +36,9 @@ int raproxy_hash_file(const char *path, uint32_t console_id, char *out) {
     if (!path || !out) {
         return 0;
     }
+    /* Registers globally and delegates non-CHD paths to rcheevos' default
+       reader; idempotent, so calling it per hash is free after the first. */
+    raproxy_chd_install_cdreader();
     memset(out, 0, RAPROXY_HASH_LEN);
 
     rc_hash_iterator_t iterator;
