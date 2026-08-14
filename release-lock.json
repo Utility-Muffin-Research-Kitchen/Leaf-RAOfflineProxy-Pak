@@ -6,7 +6,7 @@
   "floor_version": "0.0.1",
   "min_leaf_version": "0.10.0",
   "min_jawaka_version": "0.10.0",
-  "min_version_note": "Floor lowered to 0.10.0 on 2026-08-14 so the pak can be qualified on the available MLP1 (Leaf 0.10.0-beta.3; the gate treats a pre-release as satisfying its own release floor, matching Syncthing). MUST be re-confirmed at R4 against the Leaf release that actually ships the transient launch bridge: no released 0.10.x contains it, so at this floor the runtime gate will let the pak start on a Leaf with no bridge, where it binds 8080 and awards nothing. Raise to that release's version before any catalog entry. Plan: umrk-workspace/plans/RAOfflineProxy/README.md. min_jawaka_version is declared metadata, not a runtime gate (nothing publishes an installed Jawaka version).",
+  "min_version_note": "0.10.0 is the release that will carry the transient RAOfflineProxy launch bridge: 0.10.0 is still in beta, and the bridge lands before it ships, so the floor names the first release that can actually route to this pak. Residual gap: the gate treats a pre-release as satisfying its own release floor (same rule as Syncthing), so a 0.10.0-beta.N older than the bridge also clears it -- acceptable because betas are dev builds and no catalog entry exists before 0.10.0 ships. min_jawaka_version is declared metadata, not a runtime gate: nothing on the device publishes an installed Jawaka version, and Jawaka ships inside the Leaf payload. Plan: umrk-workspace/plans/RAOfflineProxy/README.md.",
   "upstream_lock": "locks/upstream.lock.json",
   "runtime_lock": "locks/runtime.lock.json",
   "mlp1_toolchain_image": "ghcr.io/utility-muffin-research-kitchen/mlp1-toolchain@sha256:66aac16fb8b07e663c9b4d66970f272df195a6eba98dfad8286eabbaa617faf9",

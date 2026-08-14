@@ -191,11 +191,37 @@
              schedule_image_download(url, clean_path, user_agent)
          return raw_response_bytes(200, body_bytes, content_type, "OK")
  
-@@ -404,6 +476,16 @@
-                 return raw_response_bytes(
+@@ -309,12 +381,24 @@
+         self, method: str, path: str, raw_body: str, headers: dict[str, str]
+     ) -> bytes:
+         if is_static_asset_request(path):
++            # Leaf: only the on-disk image CACHE is disabled in v1. The online
++            # pass-through is not optional -- rcheevos sends badge/media URLs to
++            # the custom host too, and RetroArch writes a badge to its own
++            # thumbnails cache only on a 200 and then never re-requests it
++            # (cheevos_client.c: path_is_valid -> return false; non-200 -> log
++            # only). Gating the forward on image_caching_enabled meant every
++            # badge got a 204 online as well as offline, so RetroArch cached
++            # nothing, displayed no badges while proxied, and re-requested the
++            # same asset indefinitely.
+             if image_caching_enabled(getattr(self, "config_data", {})):
+                 cached_asset = resolve_cached_static_asset(path)
+                 if cached_asset is not None:
+                     return raw_response_bytes(200, cached_asset.read_bytes(), guess_content_type(cached_asset), "OK")
+-                if self.is_online():
+-                    return self._forward_static_asset(path, headers)
++            if self.is_online():
++                return self._forward_static_asset(path, headers)
++            # Offline and not in RetroArch's own cache: nothing to serve. This
++            # is self-limiting -- once the game has been played online once, as
++            # onboarding requires, RetroArch holds the badges itself.
+             return raw_response_bytes(204, b"", "application/octet-stream", "No Content")
+ 
+         user_agent = headers.get("User-Agent") or headers.get("user-agent")
+@@ -405,6 +489,16 @@
                      upstream[1], upstream[3], upstream[4], upstream[2]
                  )
-+
+ 
 +        # Leaf: only casual achievement awards are queued. A leaderboard entry
 +        # carries no achievement id, so queueing one inserts an achievementId=0
 +        # row into pending_awards -- which collides with that column's UNIQUE
@@ -205,10 +231,11 @@
 +        if extract_action(path, raw_body) == "submitlbentry":
 +            LOGGER.info("Offline leaderboard submission refused (not queued)")
 +            return error_json(503, "offline_leaderboard_not_supported")
- 
++
          return self.queue_offline_award(path, raw_body, headers)
  
-@@ -467,6 +549,9 @@
+     def schedule_post_award_refresh(
+@@ -467,6 +561,9 @@
      def queue_offline_award(
          self, path: str, raw_body: str, headers: dict[str, str]
      ) -> bytes:
@@ -218,12 +245,10 @@
          queued = self.queue_award(path, raw_body, headers)
          if not queued:
              return error_json(500, "award_queue_failed")
-@@ -796,7 +881,41 @@
-                 json.dumps({"Success": False, "Error": str(error)}).encode("utf-8"),
-                 "application/json",
+@@ -798,6 +895,40 @@
                  json.dumps({"Success": False, "Error": str(error)}),
-+            )
-+
+             )
+ 
 +    def pending_award_account_mismatch(
 +        self, path: str, raw_body: str
 +    ) -> str | None:
@@ -255,12 +280,13 @@
 +                "account_mismatch: pending awards belong to "
 +                + ", ".join(sorted(owners))
 +                + "; they must flush under their own account first"
-             )
++            )
 +        return None
- 
++
      def queue_award(self, path: str, raw_body: str, headers: dict[str, str]) -> bool:
          achievement_id = int(extract_request_param(path, raw_body, "a") or "0")
-@@ -922,165 +1041,99 @@
+         pending_award_lock = getattr(self, "pending_award_lock", None)
+@@ -922,165 +1053,99 @@
              }
  
  
@@ -272,16 +298,6 @@
 -        except OSError:
 -            continue
 -    return inodes
--
--
--def _files_replaced_underneath(inodes: dict[Path, int]) -> bool:
--    for path, inode in inodes.items():
--        try:
--            if path.stat().st_ino != inode:
--                return True
--        except OSError:
--            return True
--    return False
 +class ConnectivityMonitor(threading.Thread):
 +    """Sparse reachability maintenance.
  
@@ -292,6 +308,16 @@
 +    quiesced by the supervisor (TXN-1), not by self-restart.
 +    """
  
+-def _files_replaced_underneath(inodes: dict[Path, int]) -> bool:
+-    for path, inode in inodes.items():
+-        try:
+-            if path.stat().st_ino != inode:
+-                return True
+-        except OSError:
+-            return True
+-    return False
+-
+-
 -class ConnectivityMonitor(threading.Thread):
 -    def __init__(self, server: ProxyRuntimeServer, interval_seconds: int = 15):
 +    def __init__(self, server: ProxyRuntimeServer, interval_seconds: int = 60):
