@@ -12,6 +12,12 @@ ROOT = Path(__file__).resolve().parents[1]
 REAL = ROOT / "build" / "mlp1" / "package" / "RAOfflineProxy.pak"
 FLOOR = ROOT / "build" / "mlp1" / "floor" / "package" / "RAOfflineProxy.pak"
 
+# Read the expected versions from the lock rather than hardcoding them. A
+# hardcoded copy silently becomes a second source of truth and fails the build
+# the first time the lock legitimately moves -- which is exactly what happened
+# when the Leaf floor was lowered for device qualification.
+LOCK = json.loads((ROOT / "release-lock.json").read_text(encoding="utf-8"))
+
 
 def files(package: Path) -> list[Path]:
     result = []
@@ -51,9 +57,10 @@ def main() -> None:
     floor_manifest = json.loads((FLOOR / "pak.json").read_text(encoding="utf-8"))
     if real_manifest.get("id") != "org.umrk.raofflineproxy":
         raise SystemExit("real package id mismatch")
-    if real_manifest.get("pak_version") != "0.1.0":
+    if real_manifest.get("pak_version") != LOCK["pak_version"]:
         raise SystemExit("real package version mismatch")
-    if real_manifest.get("min_leaf_version") != "0.11.0" or real_manifest.get("min_jawaka_version") != "0.11.0":
+    if (real_manifest.get("min_leaf_version") != LOCK["min_leaf_version"]
+            or real_manifest.get("min_jawaka_version") != LOCK["min_jawaka_version"]):
         raise SystemExit("real package version-floor pair mismatch")
     service = real_manifest.get("service") or {}
     if service.get("default_enabled") is not False or service.get("run", {}).get("path") != "bin/service-run":
@@ -64,7 +71,7 @@ def main() -> None:
         "id": "org.umrk.raofflineproxy",
         "name": "RAOfflineProxy",
         "platform": "mlp1",
-        "pak_version": "0.0.1",
+        "pak_version": LOCK["floor_version"],
         "author": "Utility Muffin Research Kitchen",
         "repo_url": "https://github.com/Utility-Muffin-Research-Kitchen/Leaf-RAOfflineProxy-Pak",
         "description": "Compatibility notice for Leaf releases that cannot run RAOfflineProxy.",

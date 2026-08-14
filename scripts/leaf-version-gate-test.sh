@@ -6,7 +6,7 @@ TMP=$(mktemp -d "${TMPDIR:-/tmp}/raop-gate.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 
 cat >"$TMP/manifest.json" <<'JSON'
-{"min_leaf_version":"0.11.0","min_jawaka_version":"0.11.0"}
+{"min_leaf_version":"0.10.0","min_jawaka_version":"0.10.0"}
 JSON
 
 run_gate() {
@@ -58,16 +58,18 @@ JSON
     }
 }
 
-check 0 0.11.0 0.11.0
-check 67 0.10.0-beta.3 0.11.0
-check 67 0.11.0 0.10.0
+check 0 0.10.0 0.10.0
+# A pre-release satisfies its own release floor (same rule as Syncthing),
+# which is what lets Leaf 0.10.0-beta.3 run a pak floored at 0.10.0.
+check 0 0.10.0-beta.3 0.10.0
+check 67 0.9.9 0.10.0
 # Jawaka version absent/blank is advisory: Leaf alone decides.
-check 0 0.11.0 ""
+check 0 0.10.0 ""
 check 0 0.12.0 "not-a-version"
 
-check_real_release_json 0 0.11.0
+check_real_release_json 0 0.10.0-beta.3
 check_real_release_json 0 0.12.3
-check_real_release_json 67 0.10.9
+check_real_release_json 67 0.9.9
 
 # A missing release.json is still unknown-installed-Leaf and refuses.
 rm -f "$TMP/release.json"
