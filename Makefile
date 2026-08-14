@@ -9,7 +9,7 @@ FLOOR_PAK_VERSION ?= $(shell $(PYTHON) -c 'import json; print(json.load(open("re
 MIN_LEAF_VERSION ?= $(shell $(PYTHON) -c 'import json; print(json.load(open("release-lock.json"))["min_leaf_version"])')
 MIN_JAWAKA_VERSION ?= $(shell $(PYTHON) -c 'import json; print(json.load(open("release-lock.json"))["min_jawaka_version"])')
 
-.PHONY: fetch-sources runtime-mlp1 app-mlp1 ui-mlp1 package-platform package-mlp1 package-floor-mlp1 test-package test-version-gate clean
+.PHONY: fetch-sources runtime-mlp1 app-mlp1 ui-mlp1 package-platform package-mlp1 package-floor-mlp1 catalog-fixture catalog-selection-smoke test-package test-version-gate clean
 
 fetch-sources:
 	./scripts/fetch-sources.sh
@@ -45,6 +45,12 @@ package-floor-mlp1: ui-mlp1
 		--min-leaf-version "$(MIN_LEAF_VERSION)" \
 		--min-jawaka-version "$(MIN_JAWAKA_VERSION)"
 
+catalog-fixture:
+	$(PYTHON) scripts/build-catalog-fixture.py
+
+catalog-selection-smoke:
+	bash scripts/catalog-selection-smoke.sh
+
 test-version-gate:
 	bash scripts/leaf-version-gate-test.sh
 
@@ -52,7 +58,8 @@ test-package: package-mlp1 package-floor-mlp1
 	$(PYTHON) scripts/package_check.py
 
 clean:
-	rm -rf build/mlp1/package build/mlp1/floor/package \
+	rm -rf build/catalog-fixture \
+		build/mlp1/package build/mlp1/floor/package \
 		build/mlp1/RAOfflineProxy.mlp1.pak.zip \
 		build/mlp1/floor/RAOfflineProxy.mlp1.pak.zip \
 		build/mlp1/bin/raofflineproxy-ui build/mlp1/bin/raofflineproxy-floor

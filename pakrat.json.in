@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "id": "org.umrk.raofflineproxy",
+  "name": "RAOfflineProxy",
+  "summary": "Earn RetroAchievements offline and flush them when you reconnect.",
+  "description": "Optional managed RAOfflineProxy service for Leaf. Caches RetroAchievements data for games played online, queues casual unlocks earned offline, and submits them automatically once the network returns. Casual only; hardcore play always goes straight to the server.",
+  "author": "Utility Muffin Research Kitchen",
+  "repo_url": "https://github.com/Utility-Muffin-Research-Kitchen/Leaf-RAOfflineProxy-Pak",
+  "categories": ["tools", "network"],
+  "leaf": {
+    "packages": [
+      {
+        "platform": "mlp1",
+        "version": "@PAK_VERSION@",
+        "min_leaf_version": "@MIN_LEAF_VERSION@",
+        "artifact_name": "RAOfflineProxy.mlp1.pak.zip",
+        "install_name": "RAOfflineProxy.pak",
+        "runtime_manifest_path": "pak.json",
+        "package_dir": "build/mlp1/package/RAOfflineProxy.pak",
+        "build_command": ["make", "package-platform", "PLATFORM=mlp1"]
+      }
+    ]
+  },
+  "compat": {
+    "nextui_pak_json": "pak.json"
+  },
+  "notes": {
+    "distribution": "Pak Rat optional app; never bundled in base Leaf.",
+    "target": "mlp1"
+  }
+}
