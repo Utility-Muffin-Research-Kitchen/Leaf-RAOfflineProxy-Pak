@@ -118,7 +118,7 @@ static int raproxy_read_tracks(chd_file *chd, raproxy_chd_track *tracks,
 
     for (int index = 0; index < RAPROXY_MAX_TRACKS; index++) {
         char type[32] = "", subtype[32] = "", pgtype[32] = "", pgsub[32] = "";
-        int number = 0, frames = 0, pregap = 0, postgap = 0;
+        int number = 0, frames = 0, pregap = 0, postgap = 0, pad = -1;
         chd_error err;
 
         err = chd_get_metadata(chd, CDROM_TRACK_METADATA2_TAG, index,
@@ -129,16 +129,32 @@ static int raproxy_read_tracks(chd_file *chd, raproxy_chd_track *tracks,
                 break;
             }
         } else {
-            err = chd_get_metadata(chd, CDROM_TRACK_METADATA_TAG, index,
+            /* Dreamcast GD-ROMs carry CHGD/CHGT instead of CHT2, with an extra
+             * PAD field giving the inter-track padding explicitly. */
+            err = chd_get_metadata(chd, GDROM_TRACK_METADATA_TAG, index,
                                    metadata, sizeof(metadata), &resultlen, NULL, NULL);
             if (err != CHDERR_NONE) {
-                break;
+                err = chd_get_metadata(chd, GDROM_OLD_METADATA_TAG, index,
+                                       metadata, sizeof(metadata), &resultlen, NULL, NULL);
             }
-            if (sscanf(metadata, CDROM_TRACK_METADATA_FORMAT, &number, type,
-                       subtype, &frames) != 4) {
-                break;
+            if (err == CHDERR_NONE) {
+                if (sscanf(metadata, GDROM_TRACK_METADATA_FORMAT, &number, type,
+                           subtype, &frames, &pad, &pregap, pgtype, pgsub,
+                           &postgap) != 9) {
+                    break;
+                }
+            } else {
+                err = chd_get_metadata(chd, CDROM_TRACK_METADATA_TAG, index,
+                                       metadata, sizeof(metadata), &resultlen, NULL, NULL);
+                if (err != CHDERR_NONE) {
+                    break;
+                }
+                if (sscanf(metadata, CDROM_TRACK_METADATA_FORMAT, &number, type,
+                           subtype, &frames) != 4) {
+                    break;
+                }
+                pregap = 0;
             }
-            pregap = 0;
         }
 
         raproxy_chd_track *track = &tracks[count];
@@ -146,18 +162,25 @@ static int raproxy_read_tracks(chd_file *chd, raproxy_chd_track *tracks,
         track->number = (uint32_t)number;
         track->frames = (uint32_t)frames;
         track->pregap = (uint32_t)pregap;
-        track->chd_start = chd_frame;
         raproxy_track_geometry(type, track);
 
-        /* A pregap declared in metadata is not stored in the CHD, so it
-         * advances the absolute sector counter without consuming frames. */
+        /* The pregap IS stored in the CHD, so a track's data begins after it.
+         * The PGTYPE "V" prefix suggests otherwise, but a PC Engine CD whose
+         * track 2 declares PREGAP:225 PGTYPE:VMODE1_RAW puts its header at
+         * frame 1322 where the table without the pregap predicts 1097 --
+         * exactly 225 out. Both the CHD offset and the LBA advance by it. */
+        track->chd_start = chd_frame + (uint32_t)pregap;
         track->abs_start = abs_sector + (uint32_t)pregap;
         abs_sector += (uint32_t)pregap + (uint32_t)frames;
 
-        /* Each track's data is padded up to a 4-frame boundary in the CHD. */
-        chd_frame += (uint32_t)frames;
-        chd_frame = (chd_frame + RAPROXY_CHD_TRACK_PADDING - 1) /
-                    RAPROXY_CHD_TRACK_PADDING * RAPROXY_CHD_TRACK_PADDING;
+        chd_frame += (uint32_t)pregap + (uint32_t)frames;
+        if (pad >= 0) {
+            /* GD-ROM states its padding rather than implying it. */
+            chd_frame += (uint32_t)pad;
+        } else {
+            chd_frame = (chd_frame + RAPROXY_CHD_TRACK_PADDING - 1) /
+                        RAPROXY_CHD_TRACK_PADDING * RAPROXY_CHD_TRACK_PADDING;
+        }
         count++;
     }
 
