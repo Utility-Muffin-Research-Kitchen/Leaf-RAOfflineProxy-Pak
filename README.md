@@ -110,12 +110,13 @@ picks it up and enforces it automatically.
 
 ## License
 
-GPL-3.0-only. See [LICENSE](LICENSE).
+GPL-3.0-only, copyright Utility Muffin Research Kitchen. See [LICENSE](LICENSE)
+for the license text and [NOTICE](NOTICE) for the third-party inventory.
 
-This repository is owned by Utility Muffin Research Kitchen. The patch series
-in `patches/` and the Leaf-owned modules in `src/` modify misantronic's
-GPL-3.0-only RAOfflineProxy, so the combined work is GPL-3.0-only rather than
-MIT like the other UMRK paks. `Catastrophe-LICENSE.txt` is a verbatim copy of
-Catastrophe's own MIT license and keeps that project's copyright line
-unchanged — it is a third-party license reproduction, not this repo's
-attribution.
+The patch series in `patches/` and the Leaf-owned modules in `src/` modify
+misantronic's GPL-3.0-only RAOfflineProxy, so the combined work is GPL-3.0-only
+rather than MIT like the other UMRK paks.
+
+`Catastrophe-LICENSE.txt` is a verbatim copy of Catastrophe's own MIT
+license and keeps that project's copyright line unchanged — it is a
+third-party license reproduction, not this repo's attribution.

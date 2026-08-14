@@ -672,25 +672,3 @@ may consider it more useful to permit linking proprietary applications with
 the library.  If this is what you want to do, use the GNU Lesser General
 Public License instead of this License.  But first, please read
 <https://www.gnu.org/licenses/why-not-lgpl.html>.
-
-================================================================================
-
-Leaf-RAOfflineProxy-Pak
-Copyright (c) 2026 Utility Muffin Research Kitchen
-
-This package distributes misantronic/RAOfflineProxy (GPL-3.0-only) together
-with the Leaf patch series under patches/ and the Leaf-owned modules under
-src/. Those patches and modules modify and link against the upstream GPL-3.0
-work, so this repository is licensed GPL-3.0-only as a whole.
-
-Third-party components carry their own terms and are reproduced verbatim in
-the built package under licenses/:
-
-  - RAOfflineProxy      GPL-3.0-only     (upstream, misantronic)
-  - CPython runtime     PSF-2.0
-  - liblzma / xz        0BSD
-  - CA certificate bundle                (Mozilla, via curl)
-  - Catastrophe         MIT              (used by the pak's foreground UI;
-                                          its copyright line is upstream
-                                          Catastrophe's own and is reproduced
-                                          unaltered)

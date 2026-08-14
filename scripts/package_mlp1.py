@@ -174,6 +174,11 @@ def main() -> None:
     copy_file(ROOT / "locks" / "runtime.lock.json", PACKAGE_DIR / "licenses" / "runtime-lock.json")
     copy_file(ROOT / "locks" / "upstream.lock.json", PACKAGE_DIR / "licenses" / "upstream-lock.json")
     copy_file(ROOT / "Catastrophe-LICENSE.txt", PACKAGE_DIR / "licenses" / "Catastrophe-LICENSE.txt")
+    # The pak's own terms travel with it: GPL-3.0 obliges us to convey the
+    # license with the binary, and NOTICE is where the source offer and the
+    # third-party inventory live.
+    copy_file(ROOT / "LICENSE", PACKAGE_DIR / "licenses" / "LICENSE.txt")
+    copy_file(ROOT / "NOTICE", PACKAGE_DIR / "licenses" / "NOTICE.txt")
 
     for executable in (
         PACKAGE_DIR / "launch.sh",

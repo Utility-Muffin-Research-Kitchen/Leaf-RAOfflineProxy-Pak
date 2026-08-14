@@ -1,0 +1,23 @@
+Leaf-RAOfflineProxy-Pak
+Copyright (c) 2026 Utility Muffin Research Kitchen
+
+Licensed under the GNU General Public License v3.0 only. See LICENSE.
+
+This package distributes misantronic/RAOfflineProxy (GPL-3.0-only) together
+with the Leaf patch series under patches/ and the Leaf-owned modules under
+src/. Those patches and modules modify and link against the upstream GPL-3.0
+work, so this repository is GPL-3.0-only as a whole, rather than MIT like the
+other UMRK paks.
+
+Third-party components carry their own terms and are reproduced verbatim in
+the built package under licenses/:
+
+  RAOfflineProxy          GPL-3.0-only   upstream, misantronic
+  CPython runtime         PSF-2.0
+  liblzma / xz            0BSD
+  CA certificate bundle   MPL-2.0        Mozilla, via curl
+  Catastrophe             MIT            used by the pak's foreground UI
+
+Catastrophe-LICENSE.txt is a verbatim copy of Catastrophe's own MIT license
+and keeps that project's copyright line unchanged. It is a third-party license
+reproduction, not this repository's attribution.
