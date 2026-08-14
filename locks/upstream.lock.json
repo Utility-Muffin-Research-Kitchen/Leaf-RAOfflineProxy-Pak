@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "project": "misantronic/RAOfflineProxy",
+  "tag": "v1.11.0-alpha1",
+  "commit": "d2c22a7b86b1569efb283d1493224e368ba102be",
+  "license": "GPL-3.0-only",
+  "license_url": "https://github.com/misantronic/RAOfflineProxy/blob/v1.11.0-alpha1/LICENSE",
+  "linux_target_status": "alpha (upstream designation); audited 2026-08-06 at v1.10.0-alpha2 in umrk-workspace/plans/RAOfflineProxy and re-audited 2026-08-14 at this tag",
+  "archive": {
+    "type": "github-tag-tarball",
+    "url": "https://github.com/misantronic/RAOfflineProxy/archive/refs/tags/v1.11.0-alpha1.tar.gz",
+    "filename": "RAOfflineProxy-1.11.0-alpha1.tar.gz",
+    "size": 3152686,
+    "sha256": "a0a36a2e4ba8ba2ccb057da3b778f7345d341c62178e2563a883eaf1962eabc3"
+  },
+  "shipped_subtree": "linux/raofflineproxy",
+  "excluded_from_production_import_graph": [
+    "auth.resolve_credentials RetroArch-config credential reads",
+    "update.py (self-update)",
+    "log_uploader.py (telemetry/support endpoints)",
+    "menu_sdl.py / ui.py / menu_input.py (pygame/SDL menu)",
+    "rom_browser.py / rom_hashing.py / smart_cache.py / rvz_datasource.py / native_codecs.py (manual ROM caching)",
+    "platform.py boot hooks / autostart",
+    "lowerdeck.py (Steam Deck proxy chain)",
+    "storage_corruption.py reporting path (quarantine retained, upload removed)",
+    "image_cache.py on-disk cache and download scheduler",
+    "knulli/ muos/ onion/ rocknix/ batocera integration scripts",
+    "service.py PID-file daemon launcher (replaced by the Leaf supervised adapter)",
+    "proxy_service.py ConnectivityMonitor inode watcher (os._exit self-restart)"
+  ]
+}

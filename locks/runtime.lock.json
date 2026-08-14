@@ -1,0 +1,102 @@
+{
+  "schema": 1,
+  "product": "raofflineproxy-mlp1-runtime",
+  "status": "r0-device-spike",
+  "target": {
+    "platform": "mlp1",
+    "arch": "aarch64",
+    "python": "3.13.x",
+    "configure_prefix": "/raofflineproxy",
+    "install_dir": "RAOfflineProxy.pak/runtime",
+    "relocation": "PYTHONHOME=<pak>/runtime with SSL_CERT_FILE=<pak>/runtime/ca-certificates.crt"
+  },
+  "source_policy": {
+    "note": "Everything builds inside the pinned mlp1-toolchain container from lock-verified source archives. System ABI boundary: OpenSSL (libssl.so.3/libcrypto.so.3), SQLite (libsqlite3.so.0), libffi (libffi.so.8), expat (libexpat.so.1), zlib (libz.so.1), glibc 2.38 come from the MLP1 stock rootfs (verified present 2026-08-14); liblzma is bundled because stock MLP1 has none. No OpenSSL rpath; no PortMaster prefix or artifacts.",
+    "docker_images": "allowed only as pinned build environments",
+    "preferred_order": [
+      "build from source in the MLP1 toolchain container",
+      "use pinned upstream release archives with license, size, and SHA-256"
+    ]
+  },
+  "source_inputs": [
+    {
+      "bucket": "cpython",
+      "type": "source-tarball",
+      "project": "CPython",
+      "version": "3.13.15",
+      "python_major_minor": "3.13",
+      "filename": "Python-3.13.15.tar.xz",
+      "size": 23160540,
+      "sha256": "1e66a7945a48390ee4c2a4268a0e4185884059a13c4aab6d148aa208deea4a76",
+      "license": "PSF-2.0",
+      "url": "https://www.python.org/ftp/python/3.13.15/Python-3.13.15.tar.xz",
+      "support_status": "bugfix (PEP 719; security-only after 2027-10, EOL 2029-10)",
+      "default_include": true,
+      "build": {
+        "toolchain_image": "ghcr.io/utility-muffin-research-kitchen/mlp1-toolchain",
+        "configure": [
+          "--prefix=/raofflineproxy",
+          "--enable-shared",
+          "--with-openssl=$SYSROOT/usr",
+          "--with-system-expat",
+          "--with-system-ffi",
+          "--without-ensurepip"
+        ],
+        "make_platform": "linux-aarch64"
+      }
+    },
+    {
+      "bucket": "xz",
+      "type": "source-tarball",
+      "project": "XZ Utils / liblzma",
+      "version": "5.8.2",
+      "filename": "xz-5.8.2.tar.xz",
+      "size": 1511132,
+      "sha256": "890966ec3f5d5cc151077879e157c0593500a522f413ac50ba26d22a9a145214",
+      "license": "liblzma: 0BSD; source package includes mixed free licenses for uninstalled tools/docs",
+      "url": "https://github.com/tukaani-project/xz/releases/download/v5.8.2/xz-5.8.2.tar.xz",
+      "default_include": true,
+      "note": "Identical archive to the proven PortMaster-mlp1 ui-runtime lock (hash matches); built here under the RAOfflineProxy prefix, not copied from that artifact.",
+      "build": {
+        "toolchain_image": "ghcr.io/utility-muffin-research-kitchen/mlp1-toolchain",
+        "configure": [
+          "--host=aarch64-buildroot-linux-gnu",
+          "--prefix=/raofflineproxy",
+          "--enable-shared",
+          "--disable-static",
+          "--disable-xz",
+          "--disable-xzdec",
+          "--disable-lzmadec",
+          "--disable-lzmainfo",
+          "--disable-scripts",
+          "--disable-doc",
+          "--disable-nls"
+        ]
+      }
+    },
+    {
+      "bucket": "cacert",
+      "type": "ca-bundle",
+      "project": "curl / Mozilla CA certificate store",
+      "version": "2026-08-13",
+      "filename": "cacert.pem",
+      "size": 188900,
+      "sha256": "f66dff1bdf8f96060b8177976f8b7d9254bc89bc4db933d769f7384d28480bc9",
+      "license": "MPL-2.0",
+      "url": "https://curl.se/ca/cacert.pem",
+      "default_include": true,
+      "note": "Version taken from the bundle header 'Certificate data from Mozilla as of: Thu Aug 13 03:12:01 2026 GMT'. Shipped at <pak>/runtime/ca-certificates.crt and selected explicitly via SSL_CERT_FILE."
+    }
+  ],
+  "required_extensions": [
+    "_ssl",
+    "_sqlite3",
+    "_ctypes",
+    "_lzma",
+    "_posixsubprocess",
+    "fcntl",
+    "hashlib",
+    "subprocess",
+    "zlib"
+  ]
+}

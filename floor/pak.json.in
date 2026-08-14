@@ -1,0 +1,9 @@
+{
+  "id": "org.umrk.raofflineproxy",
+  "name": "RAOfflineProxy",
+  "platform": "mlp1",
+  "pak_version": "@PAK_VERSION@",
+  "author": "Utility Muffin Research Kitchen",
+  "repo_url": "https://github.com/Utility-Muffin-Research-Kitchen/Leaf-RAOfflineProxy-Pak",
+  "description": "Compatibility notice for Leaf releases that cannot run RAOfflineProxy."
+}

@@ -1,0 +1,31 @@
+{
+  "id": "org.umrk.raofflineproxy",
+  "name": "RAOfflineProxy",
+  "platform": "mlp1",
+  "pak_version": "0.1.0",
+  "min_leaf_version": "0.11.0",
+  "min_jawaka_version": "0.11.0",
+  "author": "Utility Muffin Research Kitchen",
+  "repo_url": "https://github.com/Utility-Muffin-Research-Kitchen/Leaf-RAOfflineProxy-Pak",
+  "description": "Experimental offline RetroAchievements proxy for casual play.",
+  "service": {
+    "schema": 1,
+    "id": "org.umrk.raofflineproxy",
+    "run": {
+      "path": "bin/service-run",
+      "args": []
+    },
+    "restart": "on-failure",
+    "default_enabled": false,
+    "stop_grace_ms": 10000,
+    "lifecycle": {
+      "game": "ignore",
+      "stop_on_storage_change": false,
+      "stop_on_suspend": false
+    }
+  },
+  "state": {
+    "root": "RAOfflineProxy",
+    "retained_roots": ["RAOfflineProxy"]
+  }
+}

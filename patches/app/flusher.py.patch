@@ -1,0 +1,82 @@
+--- a/linux/raofflineproxy/flusher.py
++++ b/linux/raofflineproxy/flusher.py
+@@ -6,7 +6,6 @@
+ from dataclasses import dataclass
+ 
+ from . import cache_keys
+-from .auth import resolve_credentials
+ from .award_signing import public_key_base64, sign_award, verify_award
+ from .config import FALLBACK_USER_AGENT, MAX_PROXY_PORT, upstream_host
+ from .network import build_api_url, http_post
+@@ -42,6 +41,44 @@
+ LOGGER = logging.getLogger("raofflineproxy")
+ 
+ 
++def award_username(award: dict) -> str | None:
++    """The RetroAchievements username an award's request body belongs to."""
++    user = extract_form_param(award.get("requestBody", ""), "u")
++    return user.lower() if user else None
++
++
++def resolve_leaf_credentials(
++    storage: Storage, pending: list[dict]
++) -> tuple[dict | None, str | None]:
++    """Leaf: flushes use only per-user tokens learned from proxied RetroArch
++    traffic. The pak never reads RetroArch configuration, so upstream's
++    auth.py credential ladder (RetroArch cfg scan, password re-login) is
++    removed with auth.py itself.
++
++    Durable state is single-account while awards are pending: if any pending
++    award belongs to a different user than the cached login, the flush defers
++    until that account's awards are gone rather than cross-substituting a
++    newer user's token.
++    """
++    credentials = storage.load_login_credentials()
++    if credentials is None:
++        return None, "no cached RetroAchievements token (play online once first)"
++    cached_user = str(credentials.get("user", "")).lower()
++    pending_users = {
++        user for user in (award_username(award) for award in pending) if user
++    }
++    if pending_users and cached_user not in pending_users:
++        owners = ", ".join(sorted(pending_users))
++        return None, (
++            f"account_mismatch: pending awards belong to {owners};"
++            " they must flush under their own account"
++        )
++    if len(pending_users) > 1:
++        owners = ", ".join(sorted(pending_users))
++        return None, f"account_mismatch: pending awards span multiple users ({owners})"
++    return credentials, None
++
++
+ @dataclass
+ class FlushOutcome:
+     flushed: int
+@@ -344,15 +381,23 @@
+         )
+ 
+     user_agent = self_user_agent()
+-    credentials = resolve_credentials(storage, config_data, user_agent)
++    credentials, credentials_error = resolve_leaf_credentials(
++        storage,
++        [
++            award
++            for award in pending
++            if award.get("status", PENDING_AWARD_STATUS_PENDING)
++            == PENDING_AWARD_STATUS_PENDING
++        ],
++    )
+     if credentials is None:
+-        LOGGER.warning("Flush aborted: no RetroAchievements credentials")
++        LOGGER.warning("Flush aborted: %s", credentials_error)
+         return FlushOutcome(
+             flushed=0,
+             total=len(pending),
+             skipped_stale=0,
+             pending_remaining=len(pending),
+-            last_error="No RetroAchievements credentials available",
++            last_error=f"No RetroAchievements credentials available: {credentials_error}",
+         )
+ 
+     refreshed = refresh_and_load_achievement_ids(

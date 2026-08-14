@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "product": "leaf-raofflineproxy-pak",
+  "status": "r0-device-spike",
+  "pak_version": "0.1.0",
+  "floor_version": "0.0.1",
+  "min_leaf_version": "0.11.0",
+  "min_jawaka_version": "0.11.0",
+  "min_version_note": "Provisional floor: first Leaf+Jawaka pair carrying the transient RAOfflineProxy launch bridge. Confirm against the actual release at R4 (plan: umrk-workspace/plans/RAOfflineProxy/README.md); if the bridge merges into the same Leaf release as Syncthing's 0.10.0 minimum, lower accordingly at R4. The pak also enforces this pair at runtime via lib/leaf-version-gate.sh.",
+  "upstream_lock": "locks/upstream.lock.json",
+  "runtime_lock": "locks/runtime.lock.json",
+  "mlp1_toolchain_image": "ghcr.io/utility-muffin-research-kitchen/mlp1-toolchain@sha256:66aac16fb8b07e663c9b4d66970f272df195a6eba98dfad8286eabbaa617faf9",
+  "target": {
+    "platform": "mlp1",
+    "arch": "aarch64",
+    "service_id": "org.umrk.raofflineproxy",
+    "listener": "127.0.0.1:8080",
+    "origin": "https://retroachievements.org",
+    "state_root": "RAOfflineProxy"
+  }
+}

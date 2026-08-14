@@ -1,0 +1,486 @@
+--- a/linux/raofflineproxy/proxy_service.py
++++ b/linux/raofflineproxy/proxy_service.py
+@@ -2,32 +2,25 @@
+ 
+ import json
+ import logging
+-import os
+ from collections.abc import Sequence
+ from pathlib import Path
+ import socket
+ import socketserver
+ import threading
+ import time
+-from http import HTTPStatus
+ from http.server import BaseHTTPRequestHandler
+-from urllib.parse import urlsplit
+ 
+-from . import cache_keys, log_uploader, storage_corruption
+-from .auth import resolve_credentials
++from . import cache_keys
+ from .award_signing import sign_award
+ from .config import (
+-    DATABASE_FILE,
+     FALLBACK_USER_AGENT,
+-    LOG_FILE,
+     RA_MEDIA_HOST,
+     image_caching_enabled,
+     proxy_host,
+     proxy_port,
+     upstream_host,
+ )
+-from .flusher import flush_pending_awards
+-from .lowerdeck import ensure_ra_proxy_chained, stop_ra_proxy_chain
++from .flusher import award_username, flush_pending_awards
+ from .image_cache import (
+     IMAGE_PATH_PREFIXES,
+     resolve_cached_static_asset,
+@@ -47,23 +40,24 @@
+ )
+ from .rom_cache import (
+     build_achievement_game_ids,
+-    build_unlocks_array,
+     cache_session,
+     cache_unlocks,
+     filter_warning_achievement_ids,
+     filter_warning_achievements_for_action,
+     merged_unlock_ids,
+-    refresh_game_patch,
+ )
+ from .state import save_online_state
+-from .storage import Storage, current_millis, migrate_user_case_in_cache_keys
++from .storage import (
++    PENDING_AWARD_STATUS_PENDING,
++    Storage,
++    current_millis,
++    migrate_user_case_in_cache_keys,
++)
+ from .utils import (
+     canonical_reason_phrase,
+     extract_action,
+     extract_request_param,
+     is_hardcore_request,
+-    parse_form_params,
+-    proxy_user_agent,
+     redact_form_tokens,
+     redact_query_tokens,
+     self_user_agent,
+@@ -73,6 +67,11 @@
+ LOGGER = logging.getLogger("raofflineproxy")
+ MAX_REQUEST_BODY_BYTES = 1_048_576
+ SOCKET_TIMEOUT_SECONDS = 30
++# Leaf: bound in-flight request work instead of upstream's unbounded
++# daemon-thread-per-connection model; a full gate refuses new connections.
++MAX_REQUEST_WORKERS = 4
++LEAF_SERVICE_ID = "org.umrk.raofflineproxy"
++LEAF_HEALTH_PROTOCOL = "leaf-health-1"
+ 
+ AWARD_ACTIONS = {"awardachievement", "submitlbentry"}
+ FAKE_OFFLINE_SUCCESS_ACTIONS = {"ping", "postactivity"}
+@@ -203,9 +202,40 @@
+ 
+ class ThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+     allow_reuse_address = True
+-    daemon_threads = True
++    # Leaf: non-daemon request threads that are drained on shutdown
++    # (block_on_close) instead of orphaned daemon threads.
++    daemon_threads = False
++    block_on_close = True
++
++    def __init__(self, *args, **kwargs) -> None:
++        self._worker_gate = threading.BoundedSemaphore(MAX_REQUEST_WORKERS)
++        super().__init__(*args, **kwargs)
++
++    def process_request(self, request, client_address):
++        if not self._worker_gate.acquire(blocking=False):
++            LOGGER.warning("Request worker gate full; refusing connection")
++            try:
++                request.sendall(error_json(503, "proxy busy"))
++            except OSError:
++                pass
++            try:
++                self.shutdown_request(request)
++            except OSError:
++                pass
++            return
++        try:
++            super().process_request(request, client_address)
++        except Exception:
++            self._worker_gate.release()
++            raise
+ 
++    def process_request_thread(self, request, client_address):
++        try:
++            super().process_request_thread(request, client_address)
++        finally:
++            self._worker_gate.release()
+ 
++
+ class ProxyRequestHandler(BaseHTTPRequestHandler):
+     server: "ProxyRuntimeServer"
+ 
+@@ -227,6 +257,18 @@
+             self.wfile.write(error_json(403, "loopback_only"))
+             return
+ 
++        # Leaf health: answered before normal dispatch and never opens, locks,
++        # or queries SQLite. Only the fixed service id/protocol/ready shape is
++        # ever returned; never a host or port.
++        if self.path.split("?", 1)[0] == "/leaf/health":
++            self.wfile.write(self.server.leaf_health_response())
++            self.wfile.flush()
++            try:
++                self.connection.shutdown(socket.SHUT_WR)
++            except OSError:
++                pass
++            return
++
+         if self.command not in {"GET", "POST"}:
+             self.wfile.write(error_json(405, "method not allowed"))
+             return
+@@ -267,6 +309,9 @@
+         self.config_data = dict(config_data)
+         self.storage = storage
+         self.running = True
++        # Leaf: flips true only once the listener is serving and requests can
++        # actually complete; /leaf/health answers not-ready before that.
++        self.ready = False
+         self.has_internet = False
+         self.flush_lock = threading.Lock()
+         self.pending_award_lock = threading.Lock()
+@@ -274,6 +319,31 @@
+         port = proxy_port(self.config_data)
+         super().__init__((host, port), ProxyRequestHandler)
+ 
++    def leaf_health_response(self) -> bytes:
++        if not self.ready:
++            return response_bytes(
++                503,
++                json.dumps(
++                    {
++                        "service": LEAF_SERVICE_ID,
++                        "protocol": LEAF_HEALTH_PROTOCOL,
++                        "ready": False,
++                    },
++                    separators=(",", ":"),
++                ),
++                "Service Unavailable",
++            )
++        return ok_json(
++            json.dumps(
++                {
++                    "service": LEAF_SERVICE_ID,
++                    "protocol": LEAF_HEALTH_PROTOCOL,
++                    "ready": True,
++                },
++                separators=(",", ":"),
++            )
++        )
++
+     def _proxy_base_url(self) -> str:
+         cfg = getattr(self, "config_data", {})
+         return f"http://{proxy_host(cfg)}:{proxy_port(cfg)}"
+@@ -301,7 +371,9 @@
+         if result is None:
+             return raw_response_bytes(204, b"", "application/octet-stream", "No Content")
+         body_bytes, content_type = result
+-        if body_bytes:
++        # Leaf: image caching is disabled; forward-and-forget, never schedule
++        # upstream's on-disk download after pass-through.
++        if body_bytes and image_caching_enabled(self.config_data):
+             schedule_image_download(url, clean_path, user_agent)
+         return raw_response_bytes(200, body_bytes, content_type, "OK")
+ 
+@@ -404,6 +476,16 @@
+                 return raw_response_bytes(
+                     upstream[1], upstream[3], upstream[4], upstream[2]
+                 )
++
++        # Leaf: only casual achievement awards are queued. A leaderboard entry
++        # carries no achievement id, so queueing one inserts an achievementId=0
++        # row into pending_awards -- which collides with that column's UNIQUE
++        # constraint on the second submission, and hands the flusher a row it
++        # would replay as an achievement. Fail explicitly; offline leaderboards
++        # are out of scope in v1.
++        if extract_action(path, raw_body) == "submitlbentry":
++            LOGGER.info("Offline leaderboard submission refused (not queued)")
++            return error_json(503, "offline_leaderboard_not_supported")
+ 
+         return self.queue_offline_award(path, raw_body, headers)
+ 
+@@ -467,6 +549,9 @@
+     def queue_offline_award(
+         self, path: str, raw_body: str, headers: dict[str, str]
+     ) -> bytes:
++        mismatch_error = self.pending_award_account_mismatch(path, raw_body)
++        if mismatch_error is not None:
++            return error_json(409, mismatch_error)
+         queued = self.queue_award(path, raw_body, headers)
+         if not queued:
+             return error_json(500, "award_queue_failed")
+@@ -796,7 +881,41 @@
+                 json.dumps({"Success": False, "Error": str(error)}).encode("utf-8"),
+                 "application/json",
+                 json.dumps({"Success": False, "Error": str(error)}),
++            )
++
++    def pending_award_account_mismatch(
++        self, path: str, raw_body: str
++    ) -> str | None:
++        """Leaf: durable state is single-account while awards are pending.
++        Another user may use their own cached game data, but their awards
++        cannot join the first user's hash chain or flush with its token.
++        """
++        incoming_user = (extract_request_param(path, raw_body, "u") or "").lower()
++        if not incoming_user:
++            return None
++        with self.pending_award_lock:
++            # Only rows still awaiting a flush constrain the account.
++            # get_pending_awards() returns the whole table, including the
++            # flushed/stale/deleted rows that survive until the post-flush
++            # sweep clears them; blocking a second user on those would outlast
++            # the reason for blocking them.
++            owners = {
++                user
++                for user in (
++                    award_username(award)
++                    for award in self.storage.get_pending_awards()
++                    if award.get("status", PENDING_AWARD_STATUS_PENDING)
++                    == PENDING_AWARD_STATUS_PENDING
++                )
++                if user
++            }
++        if owners and incoming_user not in owners:
++            return (
++                "account_mismatch: pending awards belong to "
++                + ", ".join(sorted(owners))
++                + "; they must flush under their own account first"
+             )
++        return None
+ 
+     def queue_award(self, path: str, raw_body: str, headers: dict[str, str]) -> bool:
+         achievement_id = int(extract_request_param(path, raw_body, "a") or "0")
+@@ -922,165 +1041,99 @@
+             }
+ 
+ 
+-def _capture_file_inodes(paths: list[Path]) -> dict[Path, int]:
+-    inodes: dict[Path, int] = {}
+-    for path in paths:
+-        try:
+-            inodes[path] = path.stat().st_ino
+-        except OSError:
+-            continue
+-    return inodes
+-
+-
+-def _files_replaced_underneath(inodes: dict[Path, int]) -> bool:
+-    for path, inode in inodes.items():
+-        try:
+-            if path.stat().st_ino != inode:
+-                return True
+-        except OSError:
+-            return True
+-    return False
++class ConnectivityMonitor(threading.Thread):
++    """Sparse reachability maintenance.
+ 
++    Leaf: probing is driven by real proxied traffic plus this sparse sweep,
++    which exists only so pending awards flush soon after connectivity
++    returns. It never polls on upstream's 15-second idle cadence, and the
++    upstream inode-replacement hard-exit watcher is gone: package changes are
++    quiesced by the supervisor (TXN-1), not by self-restart.
++    """
+ 
+-class ConnectivityMonitor(threading.Thread):
+-    def __init__(self, server: ProxyRuntimeServer, interval_seconds: int = 15):
++    def __init__(self, server: ProxyRuntimeServer, interval_seconds: int = 60):
+         super().__init__(daemon=True)
+         self.server = server
+         self.interval_seconds = interval_seconds
+         self.stop_event = threading.Event()
+-        self.watched_inodes = _capture_file_inodes([LOG_FILE, DATABASE_FILE])
++        self._kick = threading.Event()
+ 
+     def stop(self) -> None:
+         self.stop_event.set()
++        self._kick.set()
+ 
+-    def run(self) -> None:
+-        was_online = self.server.refresh_reachability(force_probe=True)
+-        save_online_state(was_online)
+-        while not self.stop_event.wait(self.interval_seconds):
+-            if self.watched_inodes and _files_replaced_underneath(self.watched_inodes):
+-                # A reinstall deleted our log/database out from under this
+-                # process while it kept them open; exit so the next
+-                # "start proxy" spawns a fresh process against current files
+-                # instead of silently running as an invisible orphan.
+-                LOGGER.error("Data files were deleted or replaced underneath this process; exiting")
+-                os._exit(1)
+-            is_online = self.server.refresh_reachability(force_probe=True)
+-            if is_online and not was_online:
+-                LOGGER.info("Connectivity restored; attempting flush")
+-                self.server.flush_pending_awards()
+-            if is_online != was_online:
+-                save_online_state(is_online)
+-            was_online = is_online
++    def kick(self) -> None:
++        """Request an immediate sweep (used once after local readiness)."""
++        self._kick.set()
+ 
++    def _has_pending_awards(self) -> bool:
++        try:
++            return self.server.storage.pending_awards_exist_by_status("pending")
++        except Exception as exc:
++            LOGGER.warning("Pending-award check failed: %s", exc)
++            return False
+ 
+-class PeriodicRefresh(threading.Thread):
+-    def __init__(
+-        self,
+-        server: ProxyRuntimeServer,
+-        interval_seconds: int = 3600,  # 1 hour
+-        cache_ttl_seconds: int = 60 * 24 * 3600,  # 60 days (matches Android)
+-    ):
+-        super().__init__(daemon=True)
+-        self.server = server
+-        self.interval_seconds = interval_seconds
+-        self.cache_ttl_seconds = cache_ttl_seconds
+-        self.stop_event = threading.Event()
+-
+-    def stop(self) -> None:
+-        self.stop_event.set()
+-
+     def run(self) -> None:
+-        while not self.stop_event.wait(self.interval_seconds):
+-            if not self.server.is_online():
+-                continue
+-            user_agent = self_user_agent()
+-            credentials = resolve_credentials(
+-                self.server.storage,
+-                self.server.config_data,
+-                user_agent,
+-            )
+-            if credentials is None:
+-                continue
+-            patch_entries = self.server.storage.get_all_cache_by_prefix(
+-                cache_keys.PREFIX_PATCH
+-            )
+-            game_ids: list[int] = []
+-            for entry in patch_entries:
+-                game_id = cache_keys.parse_game_id_from_patch_key(entry["cacheKey"])
+-                if game_id is not None and game_id not in game_ids:
+-                    refresh_game_patch(
+-                        game_id,
+-                        credentials,
+-                        user_agent,
+-                        self.server.storage,
+-                        self.server.config_data,
+-                        cache_images=image_caching_enabled(self.server.config_data),
+-                    )
+-                    cache_unlocks(
+-                        game_id,
+-                        credentials,
+-                        user_agent,
+-                        self.server.config_data,
+-                        self.server.storage,
+-                    )
+-                    cache_session(game_id, credentials, self.server.storage)
+-                    game_ids.append(game_id)
+-            before = current_millis() - (self.cache_ttl_seconds * 1000)
+-            self.server.storage.evict_cache_older_than(before)
++        was_online = False
++        while not self.stop_event.is_set():
++            # Sweep first, then sleep. Waiting on the kick at the TOP of the
++            # loop parks this thread forever once the startup kick is consumed,
++            # quietly turning the sparse design into no design at all: queued
++            # awards would sit until the user happened to start another online
++            # session.
++            if self._has_pending_awards():
++                is_online = self.server.refresh_reachability(force_probe=True)
++                if is_online != was_online:
++                    save_online_state(is_online)
++                if is_online:
++                    LOGGER.info("Connectivity looks up with pending awards; flushing")
++                    self.server.flush_pending_awards()
++                was_online = is_online
++            # With nothing queued there is no probe at all: real proxied
++            # requests keep network state fresh, so an idle device never polls.
++            self._kick.wait(self.interval_seconds)
++            self._kick.clear()
+ 
+ 
+-def retry_storage_corruption_report() -> None:
+-    # The menu only ever attempts this once (on first open after the incident) and shows
+-    # the user the outcome regardless of success, so it doesn't nag them again — if that
+-    # one attempt happened while offline, the report would otherwise never reach us. The
+-    # service retries silently on every startup until it actually gets through.
+-    incident = storage_corruption.load_incident()
+-    if incident is None or incident.get("reported"):
+-        return
+-    try:
+-        upload_id = log_uploader.report_storage_corruption(incident)
+-    except Exception as exc:
+-        LOGGER.warning("Storage corruption report retry failed: %s", exc)
+-        return
+-    storage_corruption.mark_reported(upload_id)
+-
+-
+ def run_proxy_service(
+     config_data: dict, stop_event: threading.Event | None = None
+ ) -> None:
++    """Leaf supervised foreground loop.
++
++    Startup order: durable state first, then the loopback listener and local
++    readiness, and only then any reachability probing or award flushing — a
++    slow or absent network can never delay the proxy becoming usable.
++    """
+     storage = Storage()
+     migrate_user_case_in_cache_keys(storage)
+-    ensure_ra_proxy_chained(config_data)
+     server = ProxyRuntimeServer(config_data, storage)
+     connectivity_monitor = ConnectivityMonitor(server)
+-    periodic_refresh = PeriodicRefresh(server)
+ 
+     try:
+-        initial_online = server.refresh_reachability(force_probe=True)
+-        save_online_state(initial_online)
+-        if initial_online:
+-            server.flush_pending_awards()
+-            retry_storage_corruption_report()
+-        connectivity_monitor.start()
+-        periodic_refresh.start()
+-
+-        if stop_event is None:
+-            server.serve_forever(poll_interval=0.5)
+-            return
+-
+         serving_thread = threading.Thread(
+             target=server.serve_forever,
+             kwargs={"poll_interval": 0.5},
+             daemon=True,
+         )
+         serving_thread.start()
++        server.ready = True
++        LOGGER.info(
++            "Proxy ready on %s:%s",
++            proxy_host(config_data),
++            proxy_port(config_data),
++        )
++        connectivity_monitor.start()
++        connectivity_monitor.kick()
++
++        if stop_event is None:
++            serving_thread.join()
++            return
++
+         while not stop_event.wait(0.5):
+             continue
+         server.shutdown()
+         serving_thread.join(timeout=5)
+     finally:
+         connectivity_monitor.stop()
+-        periodic_refresh.stop()
+-        stop_ra_proxy_chain()
+         server.server_close()
+         storage.close()

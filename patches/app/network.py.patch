@@ -1,0 +1,34 @@
+--- a/linux/raofflineproxy/network.py
++++ b/linux/raofflineproxy/network.py
+@@ -17,6 +17,9 @@
+ 
+ LOGGER = logging.getLogger("raofflineproxy")
+ REDACTED_QUERY_KEYS = {"p", "t", "token", "password"}
++# Leaf: the reachability probe runs on the RetroArch request path, so it is
++# capped at 500 ms (R0 bound; a dead/captive network must not stall play).
++REACHABILITY_PROBE_TIMEOUT_SECONDS = 0.5
+ REACHABILITY_INTERVAL_SECONDS = 30.0
+ HTTP_TOO_MANY_REQUESTS = 429
+ HTTP_GET_MAX_429_RETRIES = 4
+@@ -178,8 +181,8 @@
+     reachable, checked_at = _reachability_tracker.current()
+     if checked_at == 0.0:
+         return True
+-    if not reachable:
+-        return True
++    # Leaf: failed probes are cached too. A dead network must not cost the
++    # probe timeout again before every RetroArch request.
+     return (current_time - checked_at) >= REACHABILITY_INTERVAL_SECONDS
+ 
+ 
+@@ -226,7 +229,9 @@
+     )
+     try:
+         with urllib.request.urlopen(
+-            request, timeout=5, context=configured_ssl_context()
++            request,
++            timeout=REACHABILITY_PROBE_TIMEOUT_SECONDS,
++            context=configured_ssl_context(),
+         ) as response:
+             reachable = 200 <= response.status < 500
+             if reachable:

@@ -1,0 +1,230 @@
+--- a/linux/raofflineproxy/storage.py
++++ b/linux/raofflineproxy/storage.py
+@@ -38,7 +38,14 @@
+         ensure_config_dir()
+         self._database_path = database_path
+         self._lock = threading.RLock()
+-        self._use_sqlite = sqlite3 is not None
++        if sqlite3 is None:
++            # Leaf: the upstream JSON fallback exists for SQLite-less distros;
++            # the pak bundles a runtime with _sqlite3, so reaching this is a
++            # broken install, not a fallback to silently accept.
++            raise RuntimeError(
++                "sqlite3 is unavailable; the Leaf JSON fallback is disabled"
++            )
++        self._use_sqlite = True
+         self._json_path = database_path.with_suffix(".json")
+         self._json_lock_path = self._json_path.with_suffix(
+             f"{self._json_path.suffix}.lock"
+@@ -46,14 +53,11 @@
+         self._json_state: dict[str, Any] | None = None
+         self._connection = None
+ 
+-        if self._use_sqlite:
+-            self._connection = sqlite3.connect(
+-                self._database_path, check_same_thread=False, timeout=5.0
+-            )
+-            self._connection.row_factory = sqlite3.Row
+-            self._initialize_sqlite()
+-        else:
+-            self._initialize_json()
++        self._connection = sqlite3.connect(
++            self._database_path, check_same_thread=False, timeout=5.0
++        )
++        self._connection.row_factory = sqlite3.Row
++        self._initialize_sqlite()
+ 
+     def close(self) -> None:
+         with self._lock:
+@@ -64,60 +68,113 @@
+         assert self._connection is not None
+         with self._lock:
+             try:
+-                self._connection.execute("PRAGMA journal_mode=WAL;").fetchone()
+-            except sqlite3.OperationalError:
+-                # WAL requires shared-memory/locking semantics that FAT32
+-                # (e.g. Miyoo Mini / Onion SD cards) doesn't provide.
+-                self._connection.execute("PRAGMA journal_mode=DELETE;")
+-            self._connection.executescript(
+-                """
+-                CREATE TABLE IF NOT EXISTS api_cache (
+-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+-                    cacheKey TEXT NOT NULL UNIQUE,
+-                    responseBody TEXT NOT NULL,
+-                    sourceRomPath TEXT,
+-                    cachedAt INTEGER NOT NULL,
+-                    firstCachedAt INTEGER NOT NULL
+-                );
+-                CREATE TABLE IF NOT EXISTS pending_awards (
+-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+-                    achievementId INTEGER NOT NULL UNIQUE,
+-                    queryString TEXT NOT NULL,
+-                    requestBody TEXT NOT NULL,
+-                    userAgent TEXT NOT NULL,
+-                    queuedAt INTEGER NOT NULL,
+-                    retryCount INTEGER NOT NULL DEFAULT 0,
+-                    lastError TEXT,
+-                    status TEXT NOT NULL DEFAULT 'pending',
+-                    payloadHash TEXT NOT NULL DEFAULT '',
+-                    prevHash TEXT NOT NULL DEFAULT '',
+-                    signature TEXT NOT NULL DEFAULT '',
+-                    signedAt INTEGER NOT NULL DEFAULT 0
+-                );
+-                """
++                self._enforce_durability_contract()
++            except sqlite3.DatabaseError as exc:
++                # A malformed image surfaces at the first pragma, not at
++                # integrity_check; quarantine and refuse rather than letting
++                # any later write silently start over.
++                self._quarantine_and_refuse(f"sqlite error: {exc}")
++            self._create_schema()
++
++    def _enforce_durability_contract(self) -> None:
++        assert self._connection is not None
++        # Leaf: durable state lives on a FAT32 SD card, where WAL's
++        # shared-memory/index recovery is not power-loss safe (the WAL
++        # pragma even succeeds there, so upstream's try/fallback never
++        # triggers). Require DELETE and synchronous=FULL as read back,
++        # and refuse startup rather than silently relaxing either.
++        journal_row = self._connection.execute(
++            "PRAGMA journal_mode=DELETE;"
++        ).fetchone()
++        journal_mode = str(journal_row[0]).lower() if journal_row else ""
++        if journal_mode != "delete":
++            raise RuntimeError(
++                f"journal_mode did not settle to delete (got {journal_mode!r});"
++                " refusing to run with a weakened durability contract"
+             )
+-            cache_columns = {
+-                row["name"]
+-                for row in self._connection.execute(
+-                    "PRAGMA table_info(api_cache)"
+-                ).fetchall()
+-            }
+-            if "sourceRomPath" not in cache_columns:
+-                self._connection.execute(
+-                    "ALTER TABLE api_cache ADD COLUMN sourceRomPath TEXT"
+-                )
++        self._connection.execute("PRAGMA synchronous=FULL;").fetchone()
++        sync_row = self._connection.execute(
++            "PRAGMA synchronous;"
++        ).fetchone()
++        synchronous = int(sync_row[0]) if sync_row else 0
++        if synchronous != 2:
++            raise RuntimeError(
++                f"synchronous did not settle to FULL (got {synchronous});"
++                " refusing to run with a weakened durability contract"
++            )
++        integrity_row = self._connection.execute(
++            "PRAGMA integrity_check;"
++        ).fetchone()
++        integrity = str(integrity_row[0]).lower() if integrity_row else ""
++        if integrity != "ok":
++            self._quarantine_and_refuse(f"integrity_check: {integrity}")
+ 
+-            columns = {
+-                row["name"]
+-                for row in self._connection.execute(
+-                    "PRAGMA table_info(pending_awards)"
+-                ).fetchall()
+-            }
+-            if "status" not in columns:
+-                self._connection.execute(
+-                    "ALTER TABLE pending_awards ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'"
+-                )
+-            self._connection.commit()
++    def _quarantine_and_refuse(self, reason: str) -> None:
++        try:
++            if self._connection is not None:
++                self._connection.close()
++        except sqlite3.Error:
++            pass
++        self._connection = None
++        quarantined = self._quarantine_corrupt_sqlite(reason)
++        raise RuntimeError(
++            f"SQLite durability/integrity failure ({reason});"
++            f" database quarantined to {quarantined}."
++            " Refusing to start over a fresh database because pending"
++            " awards are never silently reset."
++        )
++
++    def _create_schema(self) -> None:
++        assert self._connection is not None
++        self._connection.executescript(
++            """
++            CREATE TABLE IF NOT EXISTS api_cache (
++                id INTEGER PRIMARY KEY AUTOINCREMENT,
++                cacheKey TEXT NOT NULL UNIQUE,
++                responseBody TEXT NOT NULL,
++                sourceRomPath TEXT,
++                cachedAt INTEGER NOT NULL,
++                firstCachedAt INTEGER NOT NULL
++            );
++            CREATE TABLE IF NOT EXISTS pending_awards (
++                id INTEGER PRIMARY KEY AUTOINCREMENT,
++                achievementId INTEGER NOT NULL UNIQUE,
++                queryString TEXT NOT NULL,
++                requestBody TEXT NOT NULL,
++                userAgent TEXT NOT NULL,
++                queuedAt INTEGER NOT NULL,
++                retryCount INTEGER NOT NULL DEFAULT 0,
++                lastError TEXT,
++                status TEXT NOT NULL DEFAULT 'pending',
++                payloadHash TEXT NOT NULL DEFAULT '',
++                prevHash TEXT NOT NULL DEFAULT '',
++                signature TEXT NOT NULL DEFAULT '',
++                signedAt INTEGER NOT NULL DEFAULT 0
++            );
++            """
++        )
++        cache_columns = {
++            row["name"]
++            for row in self._connection.execute(
++                "PRAGMA table_info(api_cache)"
++            ).fetchall()
++        }
++        if "sourceRomPath" not in cache_columns:
++            self._connection.execute(
++                "ALTER TABLE api_cache ADD COLUMN sourceRomPath TEXT"
++            )
++
++        columns = {
++            row["name"]
++            for row in self._connection.execute(
++                "PRAGMA table_info(pending_awards)"
++            ).fetchall()
++        }
++        if "status" not in columns:
++            self._connection.execute(
++                "ALTER TABLE pending_awards ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'"
++            )
++        self._connection.commit()
+ 
+     def _initialize_json(self) -> None:
+         with self._lock:
+@@ -162,6 +219,25 @@
+         self._json_state.setdefault("api_cache", [])
+         self._json_state.setdefault("pending_awards", [])
+ 
++    def _quarantine_corrupt_sqlite(self, reason: str) -> Path:
++        quarantine_path = self._database_path.with_name(
++            f"{self._database_path.name}.corrupt-{current_millis()}"
++        )
++        try:
++            size_bytes = self._database_path.stat().st_size
++            self._database_path.replace(quarantine_path)
++        except OSError as exc:
++            LOGGER.error(
++                "Failed to quarantine corrupt database %s: %s",
++                self._database_path,
++                exc,
++            )
++            return self._database_path
++        storage_corruption.record_incident(
++            quarantine_path, reason, size_bytes, None
++        )
++        return quarantine_path
++
+     def _quarantine_corrupt_json_unlocked(self, reason: str) -> None:
+         quarantine_path = self._json_path.with_name(
+             f"{self._json_path.name}.corrupt-{current_millis()}"
