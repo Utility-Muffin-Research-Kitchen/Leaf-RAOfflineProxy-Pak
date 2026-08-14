@@ -9,7 +9,7 @@ FLOOR_PAK_VERSION ?= $(shell $(PYTHON) -c 'import json; print(json.load(open("re
 MIN_LEAF_VERSION ?= $(shell $(PYTHON) -c 'import json; print(json.load(open("release-lock.json"))["min_leaf_version"])')
 MIN_JAWAKA_VERSION ?= $(shell $(PYTHON) -c 'import json; print(json.load(open("release-lock.json"))["min_jawaka_version"])')
 
-.PHONY: fetch-sources runtime-mlp1 app-mlp1 ui-mlp1 package-platform package-mlp1 package-floor-mlp1 catalog-fixture catalog-selection-smoke test-package test-version-gate clean
+.PHONY: fetch-sources runtime-mlp1 app-mlp1 ui-mlp1 package-platform package-mlp1 package-floor-mlp1 rchash-mlp1 catalog-fixture catalog-selection-smoke test-package test-version-gate clean
 
 fetch-sources:
 	./scripts/fetch-sources.sh
@@ -19,6 +19,9 @@ runtime-mlp1: fetch-sources
 
 app-mlp1: fetch-sources
 	./scripts/assemble-app.sh
+
+rchash-mlp1: fetch-sources
+	./scripts/build-rchash.sh
 
 ui-mlp1:
 	docker run --rm \
@@ -33,7 +36,7 @@ package-platform:
 		*) echo "unsupported Leaf-RAOfflineProxy-Pak platform: $(PLATFORM)" >&2; exit 1 ;; \
 	esac
 
-package-mlp1: runtime-mlp1 app-mlp1 ui-mlp1
+package-mlp1: runtime-mlp1 app-mlp1 rchash-mlp1 ui-mlp1
 	$(PYTHON) scripts/package_mlp1.py \
 		--pak-version "$(PAK_VERSION)" \
 		--min-leaf-version "$(MIN_LEAF_VERSION)" \
@@ -58,7 +61,7 @@ test-package: package-mlp1 package-floor-mlp1
 	$(PYTHON) scripts/package_check.py
 
 clean:
-	rm -rf build/catalog-fixture \
+	rm -rf build/catalog-fixture build/mlp1/rchash \
 		build/mlp1/package build/mlp1/floor/package \
 		build/mlp1/RAOfflineProxy.mlp1.pak.zip \
 		build/mlp1/floor/RAOfflineProxy.mlp1.pak.zip \

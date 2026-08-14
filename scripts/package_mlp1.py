@@ -155,6 +155,11 @@ def main() -> None:
     )
 
     upstream_archive = ROOT / "workdir" / "sources" / upstream_lock["archive"]["filename"]
+    rcheevos_input = next(
+        item for item in runtime_lock["source_inputs"]
+        if item.get("bucket") == "rcheevos"
+    )
+    rcheevos_archive = ROOT / "workdir" / "sources" / rcheevos_input["filename"]
     copy_tar_member(upstream_archive, "/LICENSE", PACKAGE_DIR / "licenses" / "RAOfflineProxy-GPL-3.0.txt")
     copy_tar_member(
         ROOT / "workdir" / "sources" / "Python-3.13.15.tar.xz",
@@ -174,6 +179,13 @@ def main() -> None:
     copy_file(ROOT / "locks" / "runtime.lock.json", PACKAGE_DIR / "licenses" / "runtime-lock.json")
     copy_file(ROOT / "locks" / "upstream.lock.json", PACKAGE_DIR / "licenses" / "upstream-lock.json")
     copy_file(ROOT / "Catastrophe-LICENSE.txt", PACKAGE_DIR / "licenses" / "Catastrophe-LICENSE.txt")
+    # The rc_hash wrapper the offline pre-cache uses to compute a RA ROM hash
+    # without launching the game. lib/ matches the loader path the hashing
+    # module searches.
+    copy_file(ROOT / "build" / "mlp1" / "rchash" / "libraproxy_rchash.so",
+              PACKAGE_DIR / "lib" / "libraproxy_rchash.so")
+    copy_tar_member(rcheevos_archive, "/LICENSE",
+                    PACKAGE_DIR / "licenses" / "rcheevos-MIT.txt")
     # The pak's own terms travel with it: GPL-3.0 obliges us to convey the
     # license with the binary, and NOTICE is where the source offer and the
     # third-party inventory live.

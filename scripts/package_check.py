@@ -92,6 +92,8 @@ def main() -> None:
         "runtime/bin/python3",
         "runtime/ca-certificates.crt",
         "res/icon.png",
+        "lib/libraproxy_rchash.so",
+        "licenses/rcheevos-MIT.txt",
     }
     actual_real = {path.relative_to(REAL).as_posix() for path in real_files}
     if not required_real <= actual_real:

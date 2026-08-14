@@ -86,6 +86,21 @@
       "url": "https://curl.se/ca/cacert.pem",
       "default_include": true,
       "note": "Version taken from the bundle header 'Certificate data from Mozilla as of: Thu Aug 13 03:12:01 2026 GMT'. Shipped at <pak>/runtime/ca-certificates.crt and selected explicitly via SSL_CERT_FILE."
+    },
+    {
+      "bucket": "rcheevos",
+      "type": "source-tarball",
+      "project": "rcheevos",
+      "version": "12.1.0",
+      "tag": "v12.1.0",
+      "filename": "rcheevos-12.1.0.tar.gz",
+      "url": "https://github.com/RetroAchievements/rcheevos/archive/refs/tags/v12.1.0.tar.gz",
+      "size": 424594,
+      "sha256": "a535ba586b8a2431ff163b1eba5d56f95352c5e058abd260886a56b8d5041013",
+      "license": "MIT; bundled md5.c/md5.h are Aladdin Enterprises zlib-style",
+      "purpose": "rc_hash, built into libraproxy_rchash.so so the pak can compute a RetroAchievements ROM hash without launching the game",
+      "version_policy": "PIN TO THE VERSION THE DEVICE'S RETROARCH VENDORS (currently 12.1.0), not upstream latest. A pre-computed hash that disagrees with the one rcheevos produces inside RetroArch writes cache under a key nothing ever looks up. Move this pin when the RetroArch build moves, and re-run the hash-agreement device check.",
+      "notes": "Upstream tarball, not RetroArch's deps/rcheevos copy: that one is patched to include libretro-common's <lrc_hash.h> and does not build standalone. hash_encrypted.c/aes.c (3DS) are excluded; MLP1 has no 3DS."
     }
   ],
   "required_extensions": [
