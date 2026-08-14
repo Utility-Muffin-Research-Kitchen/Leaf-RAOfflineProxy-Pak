@@ -54,10 +54,19 @@ typedef struct {
     raproxy_chd_track track;
 } raproxy_chd_handle;
 
-/* Map a CHD track TYPE string to the sector geometry rc_hash expects. The
- * distinction that matters is how many bytes precede the user data: a raw
- * 2352-byte sector carries a 16-byte sync+header for MODE1, 24 for MODE2
- * form 1, while cooked modes store user data directly. */
+/* Map a CHD track TYPE string to the sector geometry rc_hash expects.
+ *
+ * Straight from rcheevos' own table (src/rhash/cdreader.c): every one of these
+ * modes carries a 2048-byte payload, and only the header length differs.
+ *
+ *   MODE1/2048  no header                       payload 2048
+ *   MODE1/2352  16-byte header, 288-byte footer payload 2048
+ *   MODE2/2336   8-byte header, 280-byte footer payload 2048
+ *   MODE2/2352  24-byte header, 280-byte footer payload 2048
+ *
+ * Getting MODE2 wrong is silent: the read succeeds and returns plausible bytes
+ * from the wrong offset, so the hash is confidently incorrect rather than
+ * absent. */
 static void raproxy_track_geometry(const char *type, raproxy_chd_track *track) {
     track->sector_size = CD_MAX_SECTOR_DATA;
     track->header_size = 0;
@@ -65,21 +74,26 @@ static void raproxy_track_geometry(const char *type, raproxy_chd_track *track) {
     track->is_data = 1;
 
     if (strcmp(type, "MODE1") == 0) {
+        /* cooked 2048 */
         track->data_size = 2048;
     } else if (strcmp(type, "MODE1_RAW") == 0) {
+        /* MODE1/2352: 16-byte header, 288-byte footer */
         track->header_size = 16;
         track->data_size = 2048;
     } else if (strcmp(type, "MODE2") == 0 || strcmp(type, "MODE2_FORM_MIX") == 0) {
-        track->data_size = 2336;
+        /* MODE2/2336: 8-byte subheader, 280-byte footer */
+        track->header_size = 8;
+        track->data_size = 2048;
     } else if (strcmp(type, "MODE2_FORM1") == 0) {
+        /* cooked 2048 */
         track->data_size = 2048;
     } else if (strcmp(type, "MODE2_FORM2") == 0) {
         track->data_size = 2324;
     } else if (strcmp(type, "MODE2_RAW") == 0) {
-        /* rc_hash expects the 8-byte subheader to remain: it inspects it to
-         * tell form 1 from form 2 per sector. */
-        track->header_size = 16;
-        track->data_size = 2336;
+        /* MODE2/2352: 24-byte header (16 sync+header + 8 subheader), 280-byte
+         * footer. This is the PlayStation layout. */
+        track->header_size = 24;
+        track->data_size = 2048;
     } else if (strcmp(type, "AUDIO") == 0) {
         track->is_data = 0;
         track->data_size = CD_MAX_SECTOR_DATA;
@@ -93,7 +107,13 @@ static int raproxy_read_tracks(chd_file *chd, raproxy_chd_track *tracks,
     char metadata[512];
     uint32_t resultlen = 0;
     uint32_t chd_frame = 0;
-    uint32_t abs_sector = 150; /* CDs start at MSF 00:02:00 */
+    /* rcheevos addresses sectors in LBA where track 1 begins at 0, NOT the
+     * 150-frame MSF offset: rc_hash_sega_cd reads sector 0 outright and
+     * rc_cd_read_sector passes the number through unmodified. Starting this
+     * counter at 150 made every such read land before the track and return
+     * nothing, which surfaced as "Not a Sega CD" with the data sitting
+     * correctly in the file the whole time. */
+    uint32_t abs_sector = 0;
     int count = 0;
 
     for (int index = 0; index < RAPROXY_MAX_TRACKS; index++) {
