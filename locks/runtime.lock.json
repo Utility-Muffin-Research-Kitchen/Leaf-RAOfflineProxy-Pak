@@ -101,6 +101,20 @@
       "purpose": "rc_hash, built into libraproxy_rchash.so so the pak can compute a RetroAchievements ROM hash without launching the game",
       "version_policy": "PIN TO THE VERSION THE DEVICE'S RETROARCH VENDORS (currently 12.1.0), not upstream latest. A pre-computed hash that disagrees with the one rcheevos produces inside RetroArch writes cache under a key nothing ever looks up. Move this pin when the RetroArch build moves, and re-run the hash-agreement device check.",
       "notes": "Upstream tarball, not RetroArch's deps/rcheevos copy: that one is patched to include libretro-common's <lrc_hash.h> and does not build standalone. hash_encrypted.c/aes.c (3DS) are excluded; MLP1 has no 3DS."
+    },
+    {
+      "bucket": "libchdr",
+      "type": "source-tarball",
+      "project": "libchdr",
+      "version": "0.3.0",
+      "tag": "v0.3.0",
+      "filename": "libchdr-0.3.0.tar.gz",
+      "url": "https://github.com/rtissera/libchdr/archive/refs/tags/v0.3.0.tar.gz",
+      "size": 520105,
+      "sha256": "313f6bf5537e2494daa3daa8a931a2536fc4f2b8312c07e3c3d5324d2052fa20",
+      "license": "BSD-3-Clause; vendors lzma-25.01 (public domain), miniz-3.1.1 (MIT), zstd-1.5.7 (BSD-3/GPL-2 dual)",
+      "purpose": "CHD reading, so rc_hash can hash .chd disc images. rcheevos has no built-in CHD support: it exposes a pluggable rc_hash_cdreader_t and expects the host to supply one.",
+      "notes": "Vendored deps are built in, so this adds no new runtime shared-library dependency. Covers the four CD systems (DC, PCECD, PS, SEGACD) that raproxy_hash_file cannot otherwise hash."
     }
   ],
   "required_extensions": [
