@@ -70,6 +70,7 @@ def main() -> None:
     if floor_manifest != {
         "id": "org.umrk.raofflineproxy",
         "name": "RAOfflineProxy",
+        "icon": "res/icon.png",
         "platform": "mlp1",
         "pak_version": LOCK["floor_version"],
         "author": "Utility Muffin Research Kitchen",
@@ -101,7 +102,8 @@ def main() -> None:
         raise SystemExit("excluded upstream module entered the package")
     if any("/Volumes/" in path.read_text(encoding="utf-8", errors="ignore") for path in real_files if path.suffix in {".py", ".sh", ".json", ".txt"}):
         raise SystemExit("host path entered package text")
-    if not {"launch.sh", "pak.json", "lib/leaf-version-gate.sh", "bin/raofflineproxy-floor"} <= {
+    if not {"launch.sh", "pak.json", "lib/leaf-version-gate.sh", "bin/raofflineproxy-floor",
+            "res/icon.png"} <= {
         path.relative_to(FLOOR).as_posix() for path in floor_files
     }:
         raise SystemExit("floor package is incomplete")

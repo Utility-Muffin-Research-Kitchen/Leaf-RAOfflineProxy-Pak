@@ -1,6 +1,7 @@
 {
   "id": "org.umrk.raofflineproxy",
   "name": "RAOfflineProxy",
+  "icon": "res/icon.png",
   "platform": "mlp1",
   "pak_version": "@PAK_VERSION@",
   "author": "Utility Muffin Research Kitchen",

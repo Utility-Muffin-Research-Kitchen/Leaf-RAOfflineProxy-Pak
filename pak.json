@@ -1,6 +1,7 @@
 {
   "id": "org.umrk.raofflineproxy",
   "name": "RAOfflineProxy",
+  "icon": "res/icon.png",
   "platform": "mlp1",
   "pak_version": "0.1.0",
   "min_leaf_version": "0.11.0",
@@ -26,6 +27,8 @@
   },
   "state": {
     "root": "RAOfflineProxy",
-    "retained_roots": ["RAOfflineProxy"]
+    "retained_roots": [
+      "RAOfflineProxy"
+    ]
   }
 }

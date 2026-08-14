@@ -76,6 +76,9 @@ def main() -> None:
 
     copy_file(floor_binary, package_dir / "bin" / floor_binary.name)
     copy_file(ROOT / "floor" / "launch.sh", package_dir / "launch.sh")
+    # The floor is what a below-minimum device actually sees in the
+    # launcher, so it needs the icon too or it shows the generic badge.
+    copy_file(ROOT / "res" / "icon.png", package_dir / "res" / "icon.png")
     copy_file(ROOT / "lib" / "leaf-version-gate.sh", package_dir / "lib" / "leaf-version-gate.sh")
     copy_file(ROOT / "floor" / "requirements" / "min-leaf-version", package_dir / "requirements" / "min-leaf-version")
     copy_file(ROOT / "floor" / "requirements" / "min-jawaka-version", package_dir / "requirements" / "min-jawaka-version")
