@@ -12,7 +12,7 @@ fixture refuses to run if it ever does.
 
 | Input | Version | SHA-256 (first 16) | License |
 | --- | --- | --- | --- |
-| RAOfflineProxy (upstream) | `v1.11.0-alpha1` @ `d2c22a7b86b1` | `a0a36a2e4ba8ba2c…` | GPL-3.0-only |
+| RAOfflineProxy (upstream) | `v1.11.1-alpha1` @ `be6898e6dc26` | `104732eda35feb04…` | GPL-3.0-only |
 | CPython | 3.13.15 | `1e66a7945a48390e…` | PSF-2.0 |
 | XZ Utils / liblzma | 5.8.2 | `890966ec3f5d5cc1…` | liblzma 0BSD |
 | Mozilla CA store (via curl) | 2026-08-13 | `f66dff1bdf8f9606…` | MPL-2.0 |
@@ -153,20 +153,114 @@ work is therefore GPL-3.0-only, unlike the MIT UMRK paks. `LICENSE` carries the
 verbatim GPL text and `NOTICE` the copyright and third-party inventory; both
 ship inside the pak under `licenses/`.
 
-**Blocking for release:** the repository is private, while `pak.json` advertises
-its public URL and GPL-3.0 obliges conveying source to anyone who receives the
-binary. It must be public before any package ships.
+**Cleared 2026-08-15:** the repository is public, so the GPL-3.0 obligation to
+convey source to anyone receiving the binary is satisfied by the URL `pak.json`
+already advertises.
 
 ## Upstream alpha caveats
 
-Upstream's Linux target is explicitly alpha and was moving quickly; the pinned
-`v1.11.0-alpha1` is evidence of what was current, not a judgement that it is
-stable. Re-pin deliberately before release rather than inheriting this pin. The
-Leaf patch series removes upstream's daemon launcher, PID files, autostart,
+Upstream's Linux target is explicitly alpha and is moving quickly; the pin is
+evidence of what was current, not a judgement that it is stable. Re-pin
+deliberately before release rather than inheriting the current pin. The Leaf
+patch series removes upstream's daemon launcher, PID files, autostart,
 self-update, self-uninstall, log upload and RetroArch config access, and the
 assembly qualifier fails the build if any pruned module, forbidden import or
 banned symbol reappears — so an upstream bump is a re-qualification, not a
 version-string change.
+
+### v1.11.0-alpha1 → v1.11.1-alpha1 (2026-08-15)
+
+Eight upstream commits. **The only functional change reaching shipped code is
+`APP_VERSION`**, which is the `RAOfflineProxy/Linux/<version>` User-Agent tag.
+Every other change lands in code the pak prunes or replaces:
+
+| Upstream change | Why it does not reach us |
+| --- | --- |
+| Offline play breaking after the first queued award | Android only (`ProxyServer.kt`): an accept loop occupying a worker from a fixed pool, plus 3-second DB latch waits that fall through as cache misses. The Python service is thread-per-request over one sqlite connection guarded by an `RLock`, which blocks rather than timing out, and `flush_lock` is never taken by a lookup — so there is no path that turns a slow DB read into a false "no cached response". |
+| Boot prebind of the proxy port (`boot.py`) | Guards a boot-to-game race Leaf does not have: `jawakad` launches only a title the user picked, and the bridge proxies only when the service is already healthy. `boot.py` is pruned; the socket-adoption branch is patched out of `ProxyRuntimeServer.__init__`. |
+| OnionOS version block | Distro integration, pruned. |
+| `launch.log` collection | `log_uploader.py`, pruned. |
+| Serve-before-migrate reorder in `run_proxy_service` | Not adopted. Leaf's order is deliberate: storage migration completes before the listener opens, so the port answering implies migrated storage — the invariant the launch bridge's health gate depends on. |
+
+**Patch series:** two of thirteen hunks in `proxy_service.py.patch` rejected,
+both in regions the patch rewrites wholesale (the import block and the
+`ConnectivityMonitor`/`run_proxy_service` tail). Resolved against the new base
+and the patch regenerated; the reviewed tail was carried over verbatim rather
+than retyped.
+
+**Device evidence (MLP1, 2026-08-15).** Installed over the R4 install with a
+move-aside/promote, then restarted through CTL-1:
+
+| | |
+|---|---|
+| Version actually loaded | `1.11.1-alpha1`, UA tag `RAOfflineProxy/Linux/1.11.1-alpha1` |
+| Import graph | `proxy_service` imports clean — the service starting at all is proof the `.boot` import is gone, since it would raise `ImportError` |
+| `boot.py` in the pak | absent |
+| Restart | clean stop (`status: 0`), new pgid, `restart_count: 1`, **14 ms** to `ready` |
+| Health | `{"ready":true}` on loopback |
+| User data across the update | `integrity_check ok`, 18 cached rows and `award_secret.key` unchanged — the key offline signing depends on |
+| Offline after a queued award | 10/10 assertions (see below) |
+| `libraproxy_rchash.so` | md5-identical to the installed build, so the hash lane needs no re-verification |
+
+`managed_apps` on the device excludes RAOfflineProxy, which is the Leaf#42
+bootstrap/ownership invariant holding on real hardware rather than in a fixture.
+
+**Launch bridge re-exercised on the new build** (Balloon Kid, gambatte, game
+2184):
+
+| | |
+|---|---|
+| Routing | `service healthy; proxied launch` → `transient cheevos host + forced casual override` |
+| Per-launch config | `cheevos_custom_host = "127.0.0.1:8080"` — **1 occurrence**; hardcore `"false"` — 1 occurrence; `cheevos_token` absent |
+| First-wins in the wild | the shared config still carries `cheevos_custom_host = ""` at line 3324, so an appended override would have lost to that empty string silently — the case the strip-and-write-once fix exists for |
+| Traffic | `login2`, `achievementsets`, `startsession`, image, and a real `awardachievement` forwarded upstream; `h=0` throughout |
+| Award routing | went upstream rather than queueing — `pending_awards: 0`, cache grew 18 → 22 |
+| Exit restore | per-launch config unlinked; shared config unchanged at 3,325 lines with both keys at their original values; **0** occurrences of the proxy address |
+| Service across the session | same pgid, `restart_count` unchanged — no crash or restart |
+
+One caveat stated rather than implied: the install was a raw promote, not a
+TXN-1 transaction, so jawakad's `installed_package` still reports the R4
+catalog fixture's `0.1.2`. The install path itself was qualified at R4 and is
+unchanged by this bump.
+
+**Qualifier gap this found.** `proxy_service.py` began importing a module
+upstream invented between the two tags (`.boot`). It was neither allow-listed
+nor pruned, so it was silently dropped from the package, and because
+byte-compilation does not resolve imports the pak assembled clean — it would
+have died with `ImportError` on first start. The qualifier now requires every
+relative import to name a shipped module. Verified by mutation in both import
+forms; pruned modules still report as forbidden rather than merely unshipped.
+
+## R5 device qualification (2026-08-15)
+
+Pre-caching and the pak UI were qualified on hardware through the real Pak Rat
+install path, not a hand-promoted tree.
+
+| | |
+|---|---|
+| Install | Pak Rat from a local catalog fixture; `.pakrat-commit` marker and `pakrat_installs` record match on version, artifact sha256 and commit token |
+| Pre-cache | `ActRaiser 2` (never launched) cached to RA game 3408, then served offline against an unreachable upstream |
+| Console names | all 19 systems resolve through Jawaka's own three tiers |
+| Service controls | Run / Stop and Start with Leaf driven from the pak over CTL-1 |
+| Launch bridge | routing, exactly-once injection, forwarded traffic and exit restore |
+
+**Do not hand-promote over a Pak Rat-managed install.** Replacing the tree with
+`mv` leaves no `.pakrat-commit`, and jawakad's startup recovery then reports
+`inconsistent committed tree reason=commit-marker-unreadable` every 500 ms
+forever. It cost a debugging session here. Rebuild the artifact, regenerate the
+catalog fixture, and use **Reinstall** from the store; that is what the fixture
+is for, and it exercises the path users will take.
+
+Three UI defects came only from someone holding the device, and none would have
+surfaced in a headless check:
+
+1. The progress screen never refreshed itself — `cat_options_list`'s timed
+   refresh slept to the next wall-clock minute on exit (fixed upstream in
+   Catastrophe#9; this pak hand-rolls the screen regardless).
+2. A flat 1,968-game picker is not navigable with a d-pad.
+3. Starting the service left the menu reading "unavailable": CTL-1 `run`
+   returns at 24 ms while the control endpoints answer at ~1.8 s, and `cat_list`
+   blocks until input, so the stale value survived until the next keypress.
 
 ## Not qualified
 

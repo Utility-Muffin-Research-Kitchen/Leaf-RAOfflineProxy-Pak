@@ -139,12 +139,29 @@ bad_files = [p for p in package.iterdir() if p.suffix == ".py" and p.stem in for
 if bad_files:
     raise SystemExit(f"forbidden module present: {[p.name for p in bad_files]}")
 
+# Every sibling module a shipped file imports must itself be shipped. The
+# forbidden list only rejects modules we already know to prune, so it cannot
+# see a module upstream invents between two tags: at v1.11.1, proxy_service
+# began importing a new .boot, which is neither allow-listed nor forbidden.
+# Byte-compilation does not resolve imports, so without this the pak assembles
+# clean and dies with ImportError on the device the first time it starts.
+shipped = {p.stem for p in package.glob("*.py")}
+
 for path in sorted(package.glob("*.py")):
     text = path.read_text(encoding="utf-8")
     tree = ast.parse(text, filename=str(path))
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.level == 1 and node.module in forbidden_modules:
-            raise SystemExit(f"forbidden import in {path.name}: .{node.module}")
+        if isinstance(node, ast.ImportFrom) and node.level == 1:
+            # `from . import a, b` carries the names in aliases, not in module.
+            targets = [node.module] if node.module else [a.name for a in node.names]
+            for target in targets:
+                if target in forbidden_modules:
+                    raise SystemExit(f"forbidden import in {path.name}: .{target}")
+                if target not in shipped:
+                    raise SystemExit(
+                        f"unshipped import in {path.name}: .{target} is neither "
+                        "allow-listed nor pruned -- decide which it is"
+                    )
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.name.split(".")[0] in forbidden_modules:

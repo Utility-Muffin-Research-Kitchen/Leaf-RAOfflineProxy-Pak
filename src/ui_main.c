@@ -1,9 +1,902 @@
+/* RAOfflineProxy pak UI.
+ *
+ * Two jobs: explain what the pak is, and drive offline pre-caching. The
+ * caching itself deliberately lives in the service, not here -- the service
+ * owns the cache, the HTTP stack and the learned credentials, and a run there
+ * survives this process exiting. So this is a thin client over the service's
+ * loopback control endpoints, and closing the UI mid-run is harmless.
+ *
+ * The per-game action lives here rather than in Jawaka's launcher on purpose:
+ * product-specific RAOfflineProxy UI inside Jawaka is exactly what the plan's
+ * locked boundaries forbid. The launch bridge is allowed there because it is
+ * bounded and generic-free; a "prepare this game" button would not be.
+ *
+ * The floor build (-DRAOFFLINEPROXY_FLOOR) is the inert compatibility screen
+ * shown when Leaf is too old. It promises to perform no network activity, so
+ * the control client is compiled out of it entirely rather than merely left
+ * uncalled -- a promise the binary keeps, not just the code path.
+ */
 #define CAT_IMPLEMENTATION
 #include "catastrophe.h"
 #define CAT_WIDGETS_IMPLEMENTATION
 #include "catastrophe_widgets.h"
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#ifndef RAOFFLINEPROXY_FLOOR
+#include "cJSON.h"
+#include "ctl1_local.h"
+#include "http_local.h"
+
+/* The Leaf service adapter binds this port and nothing configures it away;
+ * it is a single constant there and a single constant here. */
+#define RAOP_PORT 8080
+
+/* Refuse to build a picker list from an implausible response rather than
+ * allocating whatever a bug on the other end claims. The qualification device
+ * holds 1,968 games. */
+#define RAOP_MAX_GAMES 20000
+
+typedef struct {
+    int id;
+    char *name;
+    char *system;
+} raop_game;
+
+static void raop_games_free(raop_game *games, int count) {
+    if (!games) {
+        return;
+    }
+    for (int i = 0; i < count; i++) {
+        free(games[i].name);
+        free(games[i].system);
+    }
+    free(games);
+}
+
+static char *raop_strdup(const char *value) {
+    if (!value) {
+        value = "";
+    }
+    size_t len = strlen(value);
+    char *copy = malloc(len + 1);
+    if (copy) {
+        memcpy(copy, value, len + 1);
+    }
+    return copy;
+}
+
+/* Percent-encode a query-string value.
+ *
+ * Every parameter needs this, not just the search box. A system id is the ROM
+ * subfolder's name, taken verbatim from the directory entry with no character
+ * restriction, so a user with Roms/PC Engine CD/ has a system id containing
+ * spaces -- and a raw space in the request target ends the path and makes the
+ * request line invalid. Unreserved set per RFC 3986; everything else escaped.
+ */
+static void raop_url_encode(char *out, size_t out_size, const char *value) {
+    size_t i = 0;
+    if (out_size == 0) {
+        return;
+    }
+    for (const char *c = value ? value : ""; *c && i + 4 < out_size; c++) {
+        if ((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') ||
+            (*c >= '0' && *c <= '9') || *c == '-' || *c == '.' || *c == '_' ||
+            *c == '~') {
+            out[i++] = *c;
+        } else {
+            i += (size_t)snprintf(out + i, out_size - i, "%%%02X",
+                                  (unsigned char)*c);
+        }
+    }
+    out[i] = '\0';
+}
+
+/* -- service calls ------------------------------------------------------- */
+
+static bool raop_service_ready(void) {
+    http_local_response response;
+    if (!http_local_request(RAOP_PORT, "GET", "/leaf/health", NULL, &response)) {
+        return false;
+    }
+    bool ready = response.status == 200 && response.body &&
+                 strstr(response.body, "\"ready\":true") != NULL;
+    http_local_response_free(&response);
+    return ready;
+}
+
+/* Pull an "error" string out of a control response so the UI can show the
+ * service's own words. Refusals here are meaningful -- "no cached token",
+ * "already running", "schema is version 7" -- and paraphrasing them in the UI
+ * would mean maintaining two descriptions of the same condition. */
+static void raop_copy_error(const char *body, char *out, size_t out_size) {
+    snprintf(out, out_size, "The service rejected the request.");
+    if (!body) {
+        return;
+    }
+    cJSON *root = cJSON_Parse(body);
+    if (!root) {
+        return;
+    }
+    const cJSON *error = cJSON_GetObjectItemCaseSensitive(root, "error");
+    if (cJSON_IsString(error) && error->valuestring) {
+        snprintf(out, out_size, "%s", error->valuestring);
+    }
+    cJSON_Delete(root);
+}
+
+static bool raop_fetch_games(const char *scope, raop_game **out_games,
+                             int *out_count, char *error, size_t error_size) {
+    *out_games = NULL;
+    *out_count = 0;
+
+    char path[128];
+    snprintf(path, sizeof(path), "/leaf/precache/games?scope=%s", scope);
+
+    http_local_response response;
+    if (!http_local_request(RAOP_PORT, "GET", path, NULL, &response)) {
+        snprintf(error, error_size,
+                 "Could not reach the RAOfflineProxy service.\n\n"
+                 "Enable it under Settings > Services, then try again.");
+        return false;
+    }
+    if (response.status != 200) {
+        raop_copy_error(response.body, error, error_size);
+        http_local_response_free(&response);
+        return false;
+    }
+
+    cJSON *root = cJSON_Parse(response.body);
+    http_local_response_free(&response);
+    if (!root) {
+        snprintf(error, error_size, "The service sent a malformed game list.");
+        return false;
+    }
+
+    const cJSON *array = cJSON_GetObjectItemCaseSensitive(root, "games");
+    int count = cJSON_IsArray(array) ? cJSON_GetArraySize(array) : 0;
+    if (count <= 0) {
+        cJSON_Delete(root);
+        *out_count = 0;
+        return true;
+    }
+    if (count > RAOP_MAX_GAMES) {
+        count = RAOP_MAX_GAMES;
+    }
+
+    raop_game *games = calloc((size_t)count, sizeof(*games));
+    if (!games) {
+        cJSON_Delete(root);
+        snprintf(error, error_size, "Out of memory building the game list.");
+        return false;
+    }
+
+    int filled = 0;
+    for (int i = 0; i < count; i++) {
+        const cJSON *entry = cJSON_GetArrayItem(array, i);
+        const cJSON *id = cJSON_GetObjectItemCaseSensitive(entry, "id");
+        const cJSON *name = cJSON_GetObjectItemCaseSensitive(entry, "name");
+        const cJSON *system = cJSON_GetObjectItemCaseSensitive(entry, "system");
+        if (!cJSON_IsNumber(id) || !cJSON_IsString(name)) {
+            continue;
+        }
+        games[filled].id = id->valueint;
+        games[filled].name = raop_strdup(name->valuestring);
+        {
+            const cJSON *label = cJSON_GetObjectItemCaseSensitive(entry, "label");
+            games[filled].system = raop_strdup(
+                cJSON_IsString(label) && label->valuestring[0]
+                    ? label->valuestring
+                    : (cJSON_IsString(system) ? system->valuestring : ""));
+        }
+        if (!games[filled].name || !games[filled].system) {
+            raop_games_free(games, filled + 1);
+            cJSON_Delete(root);
+            snprintf(error, error_size, "Out of memory building the game list.");
+            return false;
+        }
+        filled++;
+    }
+    cJSON_Delete(root);
+
+    *out_games = games;
+    *out_count = filled;
+    return true;
+}
+
+static bool raop_start(const char *json_body, char *message, size_t message_size) {
+    http_local_response response;
+    if (!http_local_request(RAOP_PORT, "POST", "/leaf/precache/start", json_body,
+                            &response)) {
+        snprintf(message, message_size,
+                 "Could not reach the RAOfflineProxy service.");
+        return false;
+    }
+    bool ok = response.status == 200;
+    if (!ok) {
+        raop_copy_error(response.body, message, message_size);
+    }
+    http_local_response_free(&response);
+    return ok;
+}
+
+static void raop_cancel(void) {
+    http_local_response response;
+    if (http_local_request(RAOP_PORT, "POST", "/leaf/precache/cancel", "{}",
+                           &response)) {
+        http_local_response_free(&response);
+    }
+}
+
+typedef struct {
+    char state[32];
+    char current[128];
+    int total;
+    int processed;
+    int cached;
+    int skipped;
+    int unsupported;
+    int failed;
+} raop_status;
+
+static bool raop_fetch_status(raop_status *status) {
+    memset(status, 0, sizeof(*status));
+    snprintf(status->state, sizeof(status->state), "unknown");
+
+    http_local_response response;
+    if (!http_local_request(RAOP_PORT, "GET", "/leaf/precache/status", NULL,
+                            &response)) {
+        return false;
+    }
+    if (response.status != 200 || !response.body) {
+        http_local_response_free(&response);
+        return false;
+    }
+    cJSON *root = cJSON_Parse(response.body);
+    http_local_response_free(&response);
+    if (!root) {
+        return false;
+    }
+
+    const cJSON *field = cJSON_GetObjectItemCaseSensitive(root, "state");
+    if (cJSON_IsString(field) && field->valuestring) {
+        snprintf(status->state, sizeof(status->state), "%s", field->valuestring);
+    }
+    field = cJSON_GetObjectItemCaseSensitive(root, "current");
+    if (cJSON_IsString(field) && field->valuestring) {
+        snprintf(status->current, sizeof(status->current), "%s", field->valuestring);
+    }
+    struct {
+        const char *key;
+        int *slot;
+    } numbers[] = {
+        { "total", &status->total },
+        { "processed", &status->processed },
+        { "cached", &status->cached },
+        { "skipped", &status->skipped },
+        { "unsupported", &status->unsupported },
+        { "failed", &status->failed },
+    };
+    for (size_t i = 0; i < sizeof(numbers) / sizeof(numbers[0]); i++) {
+        field = cJSON_GetObjectItemCaseSensitive(root, numbers[i].key);
+        if (cJSON_IsNumber(field)) {
+            *numbers[i].slot = field->valueint;
+        }
+    }
+    cJSON_Delete(root);
+    return true;
+}
+
+/* -- screens ------------------------------------------------------------- */
+
+static void raop_message(const char *text) {
+    cat_footer_item footer[] = {
+        { .button = CAT_BTN_A, .label = "OK", .is_confirm = true },
+    };
+    cat_message_opts options = {
+        .message = text,
+        .footer = footer,
+        .footer_count = 1,
+    };
+    cat_confirm_result result;
+    (void)cat_confirmation(&options, &result);
+}
+
+/* Live progress, on a hand-rolled loop rather than cat_options_list.
+ *
+ * History worth keeping, because the symptom was invisible from reading: this
+ * screen originally used the widget's refresh_interval_ms and sat frozen while
+ * a run advanced underneath it, updating only when a button was pressed. The
+ * widget selected CAT_ACTION_REFRESH on time, but its final cat_present() had
+ * no remaining redraw deadline and took the idle path, sleeping to the next
+ * wall-clock minute before returning -- measured at 11.7 s and 40 s.
+ *
+ * Catastrophe fixed that upstream (PR #9: request an active frame when the
+ * deadline fires), so refresh_interval_ms is now sound. This screen stays
+ * hand-rolled anyway, for two reasons that outlive the bug:
+ *
+ *   - It is a read-only status display, not a menu. cat_options_list draws a
+ *     selection pill on the focused row, which advertises an interaction that
+ *     does not exist here.
+ *   - Liveness then depends only on this loop, not on which Catastrophe the
+ *     pak happened to be built against. The failure mode of getting that wrong
+ *     is a silently stale screen, not a build error.
+ *
+ * Re-arming cat_request_frame_in every frame before cat_present is the same
+ * shape the Syncthing pak's live screens use.
+ *
+ * The run belongs to the service, so leaving this screen only stops watching.
+ * "Stop" is separate and explicit, because backing out of a screen is not a
+ * request to discard the API calls already spent.
+ */
+static void raop_screen_progress(void) {
+    static const char *labels[7] = {
+        "State", "Progress", "Current", "Cached", "Already cached",
+        "No RA data", "Failed",
+    };
+    char values[7][160];
+
+    cat_footer_item footer[] = {
+        { .button = CAT_BTN_B, .label = "Back" },
+        { .button = CAT_BTN_X, .label = "Stop" },
+    };
+
+    uint32_t next_poll = 0;
+    raop_status status;
+    bool have_status = false;
+
+    for (;;) {
+        uint32_t now = SDL_GetTicks();
+        if (now >= next_poll) {
+            have_status = raop_fetch_status(&status);
+            next_poll = now + 1000u;
+        }
+
+        cat_input_event event;
+        while (cat_poll_input(&event)) {
+            if (!event.pressed) continue;
+            if (event.button == CAT_BTN_B) return;
+            if (event.button == CAT_BTN_X) {
+                raop_cancel();
+                next_poll = 0; /* reflect the cancel immediately */
+            }
+        }
+
+        if (!have_status) {
+            snprintf(values[0], sizeof(values[0]), "service not reachable");
+            for (int i = 1; i < 7; i++) values[i][0] = '\0';
+        } else {
+            snprintf(values[0], sizeof(values[0]), "%s", status.state);
+            snprintf(values[1], sizeof(values[1]), "%d / %d", status.processed,
+                     status.total);
+            snprintf(values[2], sizeof(values[2]), "%s",
+                     status.current[0] ? status.current : "-");
+            snprintf(values[3], sizeof(values[3]), "%d", status.cached);
+            snprintf(values[4], sizeof(values[4]), "%d", status.skipped);
+            snprintf(values[5], sizeof(values[5]), "%d", status.unsupported);
+            snprintf(values[6], sizeof(values[6]), "%d", status.failed);
+        }
+
+        cat_draw_background();
+        cat_draw_screen_title("Preparing for offline", NULL);
+        SDL_Rect content = cat_get_content_rect(true, true, false);
+        TTF_Font *label_font = cat_get_font(CAT_FONT_LARGE);
+        TTF_Font *value_font = cat_get_font(CAT_FONT_SMALL);
+        cat_theme *theme = cat_get_theme();
+        int row_h = CAT_DS(34);
+        int y = content.y;
+        for (int i = 0; i < 7; i++) {
+            cat_draw_text(label_font, labels[i], content.x, y, theme->text);
+            int value_w = cat_measure_text(value_font, values[i]);
+            cat_draw_text(value_font, values[i],
+                          content.x + content.w - value_w, y + CAT_DS(4),
+                          theme->hint);
+            y += row_h;
+        }
+        if (cat_hints_enabled_from_env()) cat_draw_footer(footer, 2);
+
+        /* Re-arm every frame: a single arming at entry is consumed by the
+         * first present, after which the idle sleep runs to the next minute. */
+        cat_request_frame_in(1000);
+        cat_present();
+    }
+}
+
+/* Fetch the system list (system, count) for the picker's first screen. */
+static bool raop_fetch_systems(char names[][32], char labels[][64], int counts[],
+                               int max, int *out_count, char *error,
+                               size_t error_size) {
+    *out_count = 0;
+    http_local_response response;
+    if (!http_local_request(RAOP_PORT, "GET", "/leaf/precache/games?scope=systems",
+                            NULL, &response)) {
+        snprintf(error, error_size,
+                 "Could not reach the RAOfflineProxy service.\n\n"
+                 "Enable it under Settings > Services, then try again.");
+        return false;
+    }
+    if (response.status != 200) {
+        raop_copy_error(response.body, error, error_size);
+        http_local_response_free(&response);
+        return false;
+    }
+    cJSON *root = cJSON_Parse(response.body);
+    http_local_response_free(&response);
+    if (!root) {
+        snprintf(error, error_size, "The service sent a malformed system list.");
+        return false;
+    }
+    const cJSON *array = cJSON_GetObjectItemCaseSensitive(root, "systems");
+    int n = cJSON_IsArray(array) ? cJSON_GetArraySize(array) : 0;
+    int filled = 0;
+    for (int i = 0; i < n && filled < max; i++) {
+        const cJSON *entry = cJSON_GetArrayItem(array, i);
+        const cJSON *name = cJSON_GetObjectItemCaseSensitive(entry, "system");
+        const cJSON *label = cJSON_GetObjectItemCaseSensitive(entry, "label");
+        const cJSON *count = cJSON_GetObjectItemCaseSensitive(entry, "count");
+        if (!cJSON_IsString(name)) continue;
+        snprintf(names[filled], 32, "%.31s", name->valuestring);
+        /* Fall back to the folder id, the same last resort Jawaka uses. */
+        snprintf(labels[filled], 64, "%.63s",
+                 cJSON_IsString(label) && label->valuestring[0]
+                     ? label->valuestring : name->valuestring);
+        counts[filled] = cJSON_IsNumber(count) ? count->valueint : 0;
+        filled++;
+    }
+    cJSON_Delete(root);
+    *out_count = filled;
+    return true;
+}
+
+/* Show a game list already narrowed by system or search, and prepare the
+ * chosen title. Narrowing happens service-side so the list that arrives is the
+ * list being shown: scrolling all 1,968 rows to reach one game is not a usable
+ * way to choose, and the largest single system here holds 375. */
+static void raop_screen_game_list(const char *title, const char *system,
+                                  const char *search) {
+    char path[512];
+    char encoded_system[192];
+    char encoded_search[192];
+    raop_url_encode(encoded_system, sizeof(encoded_system), system);
+    raop_url_encode(encoded_search, sizeof(encoded_search), search);
+    snprintf(path, sizeof(path), "/leaf/precache/games?scope=all&system=%s&q=%s",
+             encoded_system, encoded_search);
+
+    char error[256];
+    raop_game *games = NULL;
+    int count = 0;
+    {
+        http_local_response response;
+        if (!http_local_request(RAOP_PORT, "GET", path, NULL, &response)) {
+            raop_message("Could not reach the RAOfflineProxy service.");
+            return;
+        }
+        if (response.status != 200) {
+            raop_copy_error(response.body, error, sizeof(error));
+            http_local_response_free(&response);
+            raop_message(error);
+            return;
+        }
+        cJSON *root = cJSON_Parse(response.body);
+        http_local_response_free(&response);
+        if (!root) {
+            raop_message("The service sent a malformed game list.");
+            return;
+        }
+        const cJSON *array = cJSON_GetObjectItemCaseSensitive(root, "games");
+        int n = cJSON_IsArray(array) ? cJSON_GetArraySize(array) : 0;
+        if (n > RAOP_MAX_GAMES) n = RAOP_MAX_GAMES;
+        if (n > 0) {
+            games = calloc((size_t)n, sizeof(*games));
+            if (!games) {
+                cJSON_Delete(root);
+                raop_message("Out of memory building the game list.");
+                return;
+            }
+            for (int i = 0; i < n; i++) {
+                const cJSON *entry = cJSON_GetArrayItem(array, i);
+                const cJSON *id = cJSON_GetObjectItemCaseSensitive(entry, "id");
+                const cJSON *name = cJSON_GetObjectItemCaseSensitive(entry, "name");
+                const cJSON *sys = cJSON_GetObjectItemCaseSensitive(entry, "system");
+                const cJSON *label = cJSON_GetObjectItemCaseSensitive(entry, "label");
+                if (!cJSON_IsNumber(id) || !cJSON_IsString(name)) continue;
+                games[count].id = id->valueint;
+                games[count].name = raop_strdup(name->valuestring);
+                games[count].system = raop_strdup(
+                    cJSON_IsString(label) && label->valuestring[0]
+                        ? label->valuestring
+                        : (cJSON_IsString(sys) ? sys->valuestring : ""));
+                /* A NULL here would reach cat_list as a NULL label. Bail the
+                 * same way raop_fetch_games does rather than render it. */
+                if (!games[count].name || !games[count].system) {
+                    raop_games_free(games, count + 1);
+                    cJSON_Delete(root);
+                    raop_message("Out of memory building the game list.");
+                    return;
+                }
+                count++;
+            }
+        }
+        cJSON_Delete(root);
+    }
+
+    if (count == 0) {
+        raop_games_free(games, count);
+        raop_message("No matching games.");
+        return;
+    }
+
+    cat_list_item *items = calloc((size_t)count, sizeof(*items));
+    if (!items) {
+        raop_games_free(games, count);
+        raop_message("Out of memory building the game list.");
+        return;
+    }
+    for (int i = 0; i < count; i++) {
+        items[i].label = games[i].name;
+        items[i].trailing_text = games[i].system;
+    }
+
+    cat_footer_item footer[] = {
+        { .button = CAT_BTN_B, .label = "Back" },
+        { .button = CAT_BTN_A, .label = "Prepare", .is_confirm = true },
+    };
+
+    int cursor = 0;
+    int scroll = 0;
+    for (;;) {
+        cat_list_opts opts = cat_list_default_opts(title, items, count);
+        opts.footer = footer;
+        opts.footer_count = 2;
+        opts.initial_index = cursor;
+        opts.visible_start_index = scroll;
+        cat_list_result result;
+        int rc = cat_list(&opts, &result);
+        cursor = result.selected_index >= 0 ? result.selected_index : cursor;
+        scroll = result.visible_start_index;
+
+        if (rc == CAT_CANCELLED || result.action == CAT_ACTION_BACK) break;
+        if (result.action != CAT_ACTION_SELECTED || cursor < 0 || cursor >= count) {
+            continue;
+        }
+
+        char body[64];
+        snprintf(body, sizeof(body), "{\"scope\":\"games\",\"game_ids\":[%d]}",
+                 games[cursor].id);
+        char message[256];
+        if (!raop_start(body, message, sizeof(message))) {
+            raop_message(message);
+            continue;
+        }
+        raop_screen_progress();
+    }
+
+    free(items);
+    raop_games_free(games, count);
+}
+
+/* Console first, then titles -- the same shape Leaf's scraper uses, and the
+ * only way a 1,968-game library is navigable with a d-pad. Search is the
+ * escape hatch for "I know the name". */
+static void raop_screen_pick_game(void) {
+    enum { MAX_SYSTEMS = 48 };
+    char names[MAX_SYSTEMS][32];
+    char labels[MAX_SYSTEMS][64];
+    int counts[MAX_SYSTEMS];
+    int system_count = 0;
+    char error[256];
+
+    if (!raop_fetch_systems(names, labels, counts, MAX_SYSTEMS, &system_count,
+                            error, sizeof(error))) {
+        raop_message(error);
+        return;
+    }
+    if (system_count == 0) {
+        raop_message("No games in the library yet.\n\n"
+                     "Let Leaf finish scanning, then try again.");
+        return;
+    }
+
+    char totals[MAX_SYSTEMS][16];
+    cat_list_item items[MAX_SYSTEMS];
+    for (int i = 0; i < system_count; i++) {
+        snprintf(totals[i], sizeof(totals[i]), "%d", counts[i]);
+        items[i].label = labels[i];
+        items[i].metadata = NULL;
+        items[i].image = NULL;
+        items[i].selected = false;
+        items[i].background_image = NULL;
+        items[i].trailing_text = totals[i];
+        items[i].disabled = false;
+    }
+
+    cat_footer_item footer[] = {
+        { .button = CAT_BTN_B, .label = "Back" },
+        { .button = CAT_BTN_X, .label = "Search" },
+        { .button = CAT_BTN_A, .label = "Open", .is_confirm = true },
+    };
+
+    int cursor = 0;
+    int scroll = 0;
+    for (;;) {
+        cat_list_opts opts = cat_list_default_opts("Choose a console", items,
+                                                   system_count);
+        opts.footer = footer;
+        opts.footer_count = 3;
+        opts.initial_index = cursor;
+        opts.visible_start_index = scroll;
+        opts.action_button = CAT_BTN_X;
+        cat_list_result result;
+        int rc = cat_list(&opts, &result);
+        cursor = result.selected_index >= 0 ? result.selected_index : cursor;
+        scroll = result.visible_start_index;
+
+        if (rc == CAT_CANCELLED || result.action == CAT_ACTION_BACK) break;
+
+        if (result.action == CAT_ACTION_TRIGGERED) {
+            cat_keyboard_result typed;
+            if (cat_keyboard("", "Search game titles", CAT_KB_GENERAL, &typed) == CAT_OK
+                && typed.text[0]) {
+                char title[96];
+                /* The keyboard returns up to 1 KB; a title is a heading,
+                 * not a transcript. */
+                snprintf(title, sizeof(title), "Search: %.80s", typed.text);
+                raop_screen_game_list(title, "", typed.text);
+            }
+            continue;
+        }
+        if (result.action == CAT_ACTION_SELECTED && cursor >= 0 &&
+            cursor < system_count) {
+            raop_screen_game_list(labels[cursor], names[cursor], "");
+        }
+    }
+}
+
+/* Wait for the service to actually answer after a Run.
+ *
+ * CTL-1 run returns as soon as the supervisor has spawned it -- measured at
+ * 24 ms on device -- but /leaf/health first answers at ~890 ms and the
+ * pre-cache endpoints at ~1.8 s. The menu used to re-read its rows the instant
+ * run returned, so "Prepare Recents and Favourites" latched to "unavailable"
+ * and stayed there until the next keypress happened to rebuild the screen.
+ *
+ * Waiting here rather than polling in the menu loop is deliberate: cat_list
+ * blocks until input, so a menu built on it cannot refresh itself, and the one
+ * moment the answer is known to be about to change is right after the user
+ * asked for it.
+ */
+#define RAOP_READY_WAIT_MS 6000
+
+static int raop_wait_ready_worker(void *userdata) {
+    (void)userdata;
+    for (int waited = 0; waited < RAOP_READY_WAIT_MS; waited += 100) {
+        /* Ask for what the menu actually needs. Health answers first, so
+         * waiting on health alone would return while the control endpoints
+         * were still 900 ms from ready -- the same stale read, just narrower. */
+        http_local_response response;
+        if (http_local_request(RAOP_PORT, "GET",
+                               "/leaf/precache/games?scope=recents", NULL,
+                               &response)) {
+            bool ok = response.status == 200;
+            http_local_response_free(&response);
+            if (ok) {
+                return 0;
+            }
+        }
+        struct timespec pause = { .tv_sec = 0, .tv_nsec = 100L * 1000000L };
+        nanosleep(&pause, NULL);
+    }
+    return -1;
+}
+
+/* Returns once the service answers, or after the bound. A timeout is not an
+ * error to report: the menu redraws from live state either way, and it will
+ * simply show whatever is true then. */
+static void raop_wait_until_ready(void) {
+    cat_process_opts opts = {
+        .message = "Starting the service...",
+        .message_lines = 1,
+    };
+    (void)cat_process_message(&opts, raop_wait_ready_worker, NULL);
+}
+
+/* The footer's action label follows the focused row.
+ *
+ * A menu whose confirm button always reads "Select" is honest only where every
+ * row opens something. Two of these rows change device state the moment A is
+ * pressed -- one starts or stops a service, the other flips a persisted
+ * preference -- and "Select" tells the user nothing about which, or in which
+ * direction. Catastrophe calls this every frame with the cursor, so the label
+ * can name the actual consequence.
+ */
+typedef struct {
+    const raop_service_status *service;
+    bool have_service;
+    cat_footer_item *footer;
+} raop_menu_footer_ctx;
+
+static void raop_menu_footer_update(cat_list_opts *opts, int cursor,
+                                    void *userdata) {
+    raop_menu_footer_ctx *ctx = (raop_menu_footer_ctx *)userdata;
+    if (!ctx || !ctx->footer || !opts) {
+        return;
+    }
+    const char *label = "Select";
+    if (cursor == 0) {
+        label = !ctx->have_service ? "Retry"
+              : raop_service_is_up(ctx->service) ? "Stop" : "Run";
+    } else if (cursor == 1) {
+        label = !ctx->have_service ? "Retry"
+              : ctx->service->start_with_leaf ? "Turn off" : "Turn on";
+    }
+    ctx->footer[1].label = label;
+}
+
+static void raop_screen_main(void) {
+    for (;;) {
+        char error[256];
+        raop_game *recents = NULL;
+        int recent_count = 0;
+        bool have_recents =
+            raop_fetch_games("recents", &recents, &recent_count, error, sizeof(error));
+
+        char recents_value[64];
+        if (have_recents) {
+            snprintf(recents_value, sizeof(recents_value), "%d game%s", recent_count,
+                     recent_count == 1 ? "" : "s");
+        } else {
+            snprintf(recents_value, sizeof(recents_value), "unavailable");
+        }
+
+        raop_service_status service;
+        bool have_service = raop_ctl1_status(&service);
+        char service_value[48];
+        char autostart_value[32];
+        if (!have_service) {
+            snprintf(service_value, sizeof(service_value), "control unavailable");
+            snprintf(autostart_value, sizeof(autostart_value), "-");
+        } else {
+            snprintf(service_value, sizeof(service_value), "%s",
+                     raop_service_state_label(&service));
+            snprintf(autostart_value, sizeof(autostart_value), "%s",
+                     service.start_with_leaf ? "on" : "off");
+        }
+
+        raop_status status;
+        bool have_status = raop_fetch_status(&status);
+        char status_value[96];
+        if (!have_status) {
+            snprintf(status_value, sizeof(status_value), "service not running");
+        } else if (strcmp(status.state, "running") == 0) {
+            snprintf(status_value, sizeof(status_value), "running %d / %d",
+                     status.processed, status.total);
+        } else {
+            snprintf(status_value, sizeof(status_value), "%s", status.state);
+        }
+
+        /* Service controls lead, because a user opening this pak for the
+         * first time has a deliberately disabled service and nothing below
+         * works until it runs. Two rows, not one: "Start with Leaf" is a
+         * persisted preference that starts nothing, and running now does not
+         * imply it. Merging them would restate the exact confusion the launch
+         * bridge's routing gate got wrong twice. */
+        cat_list_item items[] = {
+            { .label = "Service", .trailing_text = service_value },
+            { .label = "Start with Leaf", .trailing_text = autostart_value },
+            { .label = "Prepare Recents and Favourites",
+              .trailing_text = recents_value },
+            { .label = "Prepare one game", .trailing_text = "browse library" },
+            { .label = "Run status", .trailing_text = status_value },
+            { .label = "About this pak", .trailing_text = "" },
+        };
+        cat_footer_item footer[] = {
+            { .button = CAT_BTN_B, .label = "Exit" },
+            { .button = CAT_BTN_A, .label = "Select", .is_confirm = true },
+        };
+        raop_menu_footer_ctx footer_ctx = {
+            .service = &service,
+            .have_service = have_service,
+            .footer = footer,
+        };
+
+        cat_list_opts opts = cat_list_default_opts("RAOfflineProxy", items,
+                                                   (int)(sizeof(items) / sizeof(items[0])));
+        opts.footer = footer;
+        opts.footer_count = 2;
+        opts.footer_update = raop_menu_footer_update;
+        opts.footer_update_userdata = &footer_ctx;
+        cat_list_result result;
+        int rc = cat_list(&opts, &result);
+        int choice = result.selected_index;
+
+        if (rc == CAT_CANCELLED || result.action == CAT_ACTION_BACK) {
+            raop_games_free(recents, recent_count);
+            return;
+        }
+        if (result.action != CAT_ACTION_SELECTED) {
+            raop_games_free(recents, recent_count);
+            continue;
+        }
+
+        if (choice == 0) {
+            /* Run/stop the process now. */
+            char message[256];
+            if (!have_service) {
+                raop_message(
+                    "Leaf's service control is not reachable.\n\n"
+                    "This usually means the launcher is still starting; try "
+                    "again in a moment.");
+            } else if (raop_service_is_up(&service)) {
+                if (!raop_ctl1_action("stop", message, sizeof(message))) {
+                    raop_message(message);
+                }
+            } else if (!raop_ctl1_action("run", message, sizeof(message))) {
+                raop_message(message);
+            } else {
+                raop_wait_until_ready();
+            }
+        } else if (choice == 1) {
+            /* Toggle the persisted autostart preference. Deliberately does
+             * not also start or stop the service: enable is a statement about
+             * future boots, and silently acting on this one would make the
+             * two rows lie about each other. */
+            char message[256];
+            if (!have_service) {
+                raop_message("Leaf's service control is not reachable.");
+            } else if (!raop_ctl1_action(
+                           service.start_with_leaf ? "disable" : "enable",
+                           message, sizeof(message))) {
+                raop_message(message);
+            }
+        } else if (choice == 2) {
+            if (!have_recents) {
+                raop_message(error);
+            } else if (recent_count == 0) {
+                raop_message(
+                    "Nothing in Recents or Favourites yet.\n\n"
+                    "Play or favourite a few games first, or use Prepare one "
+                    "game to choose a title directly.");
+            } else {
+                char message[256];
+                if (!raop_start("{\"scope\":\"recents\"}", message, sizeof(message))) {
+                    raop_message(message);
+                } else {
+                    raop_screen_progress();
+                }
+            }
+        } else if (choice == 3) {
+            raop_games_free(recents, recent_count);
+            recents = NULL;
+            recent_count = 0;
+            raop_screen_pick_game();
+        } else if (choice == 4) {
+            if (!have_status) {
+                raop_message(
+                    "The RAOfflineProxy service is not running.\n\n"
+                    "Start it from the Service row on the main screen. "
+                    "Pre-caching needs the service, because the service owns "
+                    "the cache.");
+            } else {
+                raop_screen_progress();
+            }
+        } else {
+            raop_message(
+                "Experimental, casual-only offline RetroAchievements.\n\n"
+                "Sign in under Leaf Settings > Accounts, launch one game online "
+                "so the pak learns your token, then start the service from the "
+                "Service row and turn on Start with Leaf.\n\n"
+                "Preparing a game downloads its achievement data now so it can "
+                "be played offline later. Hardcore play always launches "
+                "directly, unproxied.");
+        }
+
+        raop_games_free(recents, recent_count);
+    }
+}
+#endif /* !RAOFFLINEPROXY_FLOOR */
 
 int main(int argc, char **argv) {
     (void)argc;
@@ -19,33 +912,33 @@ int main(int argc, char **argv) {
     }
 
 #ifdef RAOFFLINEPROXY_FLOOR
-    const char *message =
-        "RAOfflineProxy needs a newer Leaf release.\n\n"
-        "Update Leaf and Jawaka before trying this pak again.\n\n"
-        "This compatibility screen performs no network activity and writes "
-        "no service state.";
-#else
-    const char *message =
-        "Experimental, casual-only offline RetroAchievements.\n\n"
-        "Sign in under Leaf Settings > Accounts, launch each game online once, "
-        "then enable RAOfflineProxy in Settings > Services.\n\n"
-        "The service stays disabled until you enable Start with Leaf. Cache and "
-        "pending casual awards are retained under RAOfflineProxy userdata. "
-        "Hardcore play always launches directly.";
-#endif
-
     cat_footer_item footer[] = {
         { .button = CAT_BTN_B, .label = "Exit" },
         { .button = CAT_BTN_A, .label = "OK", .is_confirm = true },
     };
     cat_message_opts options = {
-        .message = message,
+        .message =
+            "RAOfflineProxy needs a newer Leaf release.\n\n"
+            "Update Leaf and Jawaka before trying this pak again.\n\n"
+            "This compatibility screen performs no network activity and writes "
+            "no service state.",
         .image_path = NULL,
         .footer = footer,
         .footer_count = 2,
     };
     cat_confirm_result result;
     (void)cat_confirmation(&options, &result);
+#else
+    if (!raop_service_ready()) {
+        raop_message(
+            "RAOfflineProxy is installed but its service is not running.\n\n"
+            "Start it from the Service row on the next screen, and turn on "
+            "Start with Leaf so it comes back on its own. Both are also in "
+            "Leaf Settings > Services.");
+    }
+    raop_screen_main();
+#endif
+
     cat_quit();
     return 0;
 }
