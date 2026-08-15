@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #ifndef RAOFFLINEPROXY_FLOOR
 #include "cJSON.h"
@@ -654,6 +655,54 @@ static void raop_screen_pick_game(void) {
     }
 }
 
+/* Wait for the service to actually answer after a Run.
+ *
+ * CTL-1 run returns as soon as the supervisor has spawned it -- measured at
+ * 24 ms on device -- but /leaf/health first answers at ~890 ms and the
+ * pre-cache endpoints at ~1.8 s. The menu used to re-read its rows the instant
+ * run returned, so "Prepare Recents and Favourites" latched to "unavailable"
+ * and stayed there until the next keypress happened to rebuild the screen.
+ *
+ * Waiting here rather than polling in the menu loop is deliberate: cat_list
+ * blocks until input, so a menu built on it cannot refresh itself, and the one
+ * moment the answer is known to be about to change is right after the user
+ * asked for it.
+ */
+#define RAOP_READY_WAIT_MS 6000
+
+static int raop_wait_ready_worker(void *userdata) {
+    (void)userdata;
+    for (int waited = 0; waited < RAOP_READY_WAIT_MS; waited += 100) {
+        /* Ask for what the menu actually needs. Health answers first, so
+         * waiting on health alone would return while the control endpoints
+         * were still 900 ms from ready -- the same stale read, just narrower. */
+        http_local_response response;
+        if (http_local_request(RAOP_PORT, "GET",
+                               "/leaf/precache/games?scope=recents", NULL,
+                               &response)) {
+            bool ok = response.status == 200;
+            http_local_response_free(&response);
+            if (ok) {
+                return 0;
+            }
+        }
+        struct timespec pause = { .tv_sec = 0, .tv_nsec = 100L * 1000000L };
+        nanosleep(&pause, NULL);
+    }
+    return -1;
+}
+
+/* Returns once the service answers, or after the bound. A timeout is not an
+ * error to report: the menu redraws from live state either way, and it will
+ * simply show whatever is true then. */
+static void raop_wait_until_ready(void) {
+    cat_process_opts opts = {
+        .message = "Starting the service...",
+        .message_lines = 1,
+    };
+    (void)cat_process_message(&opts, raop_wait_ready_worker, NULL);
+}
+
 /* The footer's action label follows the focused row.
  *
  * A menu whose confirm button always reads "Select" is honest only where every
@@ -786,6 +835,8 @@ static void raop_screen_main(void) {
                 }
             } else if (!raop_ctl1_action("run", message, sizeof(message))) {
                 raop_message(message);
+            } else {
+                raop_wait_until_ready();
             }
         } else if (choice == 1) {
             /* Toggle the persisted autostart preference. Deliberately does
