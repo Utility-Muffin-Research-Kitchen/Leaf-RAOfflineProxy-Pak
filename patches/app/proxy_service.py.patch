@@ -87,11 +87,11 @@
 +    # (block_on_close) instead of orphaned daemon threads.
 +    daemon_threads = False
 +    block_on_close = True
- 
++
 +    def __init__(self, *args, **kwargs) -> None:
 +        self._worker_gate = threading.BoundedSemaphore(MAX_REQUEST_WORKERS)
 +        super().__init__(*args, **kwargs)
- 
++
 +    def process_request(self, request, client_address):
 +        if not self._worker_gate.acquire(blocking=False):
 +            LOGGER.warning("Request worker gate full; refusing connection")
@@ -109,13 +109,13 @@
 +        except Exception:
 +            self._worker_gate.release()
 +            raise
-+
+ 
 +    def process_request_thread(self, request, client_address):
 +        try:
 +            super().process_request_thread(request, client_address)
 +        finally:
 +            self._worker_gate.release()
-+
+ 
 +
  class ProxyRequestHandler(BaseHTTPRequestHandler):
      server: "ProxyRuntimeServer"
@@ -139,7 +139,28 @@
          if self.command not in {"GET", "POST"}:
              self.wfile.write(error_json(405, "method not allowed"))
              return
-@@ -268,21 +309,46 @@
+@@ -248,9 +289,17 @@
+             self.server.is_online(),
+         )
+ 
+-        response = self.server.process_proxy_request(
+-            self.command, self.path, body, headers
+-        )
++        # Pak UI control surface. Namespaced under /leaf/ so it can never
++        # shadow a RetroAchievements path: anything unrecognised is forwarded
++        # upstream, so a colliding route would fail silently and confusingly.
++        if self.path.split("?", 1)[0].startswith("/leaf/precache"):
++            response = self.server.leaf_precache_response(
++                self.command, self.path, body
++            )
++        else:
++            response = self.server.process_proxy_request(
++                self.command, self.path, body, headers
++            )
+         self.wfile.write(response)
+         self.wfile.flush()
+         # Close gracefully (FIN, not RST): shut down the write side and let
+@@ -268,21 +317,52 @@
          self.config_data = dict(config_data)
          self.storage = storage
          self.running = True
@@ -163,6 +184,12 @@
 +        # when the service is already healthy -- and boot.py is pruned, so
 +        # this binds normally.
 +        super().__init__((host, port), ProxyRequestHandler)
++
++    def leaf_precache_response(self, command: str, path: str, body: str) -> bytes:
++        """Delegate to repo-owned code; see leaf_control for why this is thin."""
++        from .leaf_control import handle_precache_request
++
++        return handle_precache_request(self, command, path, body)
 +
 +    def leaf_health_response(self) -> bytes:
 +        if not self.ready:
@@ -195,7 +222,7 @@
  
      def _proxy_base_url(self) -> str:
          cfg = getattr(self, "config_data", {})
-@@ -311,7 +377,9 @@
+@@ -311,7 +391,9 @@
          if result is None:
              return raw_response_bytes(204, b"", "application/octet-stream", "No Content")
          body_bytes, content_type = result
@@ -206,7 +233,7 @@
              schedule_image_download(url, clean_path, user_agent)
          return raw_response_bytes(200, body_bytes, content_type, "OK")
  
-@@ -319,12 +387,24 @@
+@@ -319,12 +401,24 @@
          self, method: str, path: str, raw_body: str, headers: dict[str, str]
      ) -> bytes:
          if is_static_asset_request(path):
@@ -233,7 +260,7 @@
              return raw_response_bytes(204, b"", "application/octet-stream", "No Content")
  
          user_agent = headers.get("User-Agent") or headers.get("user-agent")
-@@ -414,6 +494,16 @@
+@@ -414,6 +508,16 @@
                  return raw_response_bytes(
                      upstream[1], upstream[3], upstream[4], upstream[2]
                  )
@@ -250,7 +277,7 @@
  
          return self.queue_offline_award(path, raw_body, headers)
  
-@@ -477,6 +567,9 @@
+@@ -477,6 +581,9 @@
      def queue_offline_award(
          self, path: str, raw_body: str, headers: dict[str, str]
      ) -> bytes:
@@ -260,12 +287,10 @@
          queued = self.queue_award(path, raw_body, headers)
          if not queued:
              return error_json(500, "award_queue_failed")
-@@ -806,7 +899,41 @@
-                 json.dumps({"Success": False, "Error": str(error)}).encode("utf-8"),
-                 "application/json",
+@@ -808,6 +915,40 @@
                  json.dumps({"Success": False, "Error": str(error)}),
-+            )
-+
+             )
+ 
 +    def pending_award_account_mismatch(
 +        self, path: str, raw_body: str
 +    ) -> str | None:
@@ -297,12 +322,13 @@
 +                "account_mismatch: pending awards belong to "
 +                + ", ".join(sorted(owners))
 +                + "; they must flush under their own account first"
-             )
++            )
 +        return None
- 
++
      def queue_award(self, path: str, raw_body: str, headers: dict[str, str]) -> bool:
          achievement_id = int(extract_request_param(path, raw_body, "a") or "0")
-@@ -932,146 +1059,73 @@
+         pending_award_lock = getattr(self, "pending_award_lock", None)
+@@ -932,146 +1073,73 @@
              }
  
  
@@ -495,7 +521,7 @@
  
      try:
          serving_thread = threading.Thread(
-@@ -1080,27 +1134,24 @@
+@@ -1080,27 +1148,24 @@
              daemon=True,
          )
          serving_thread.start()
