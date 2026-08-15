@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test-and-package:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout RAOfflineProxy pak
+        uses: actions/checkout@v4
+        with:
+          path: Leaf-RAOfflineProxy-Pak
+
+      # Siblings are pinned rather than tracked. A Catastrophe or Jawaka change
+      # must not be able to break -- or silently fix -- this pak's build without
+      # a deliberate bump in release-lock.json.
+      - name: Read release lock
+        id: release-lock
+        working-directory: Leaf-RAOfflineProxy-Pak
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+
+          lock = json.load(open("release-lock.json", encoding="utf-8"))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              for key in ("catastrophe_commit", "jawaka_commit", "leaf_commit"):
+                  output.write(f"{key}={lock[key]}\n")
+              output.write(f"toolchain={lock['mlp1_toolchain_image']}\n")
+          PY
+
+      - name: Checkout pinned Catastrophe
+        uses: actions/checkout@v4
+        with:
+          repository: Utility-Muffin-Research-Kitchen/Catastrophe
+          ref: ${{ steps.release-lock.outputs.catastrophe_commit }}
+          path: Catastrophe
+
+      - name: Checkout pinned Jawaka
+        uses: actions/checkout@v4
+        with:
+          repository: Utility-Muffin-Research-Kitchen/Jawaka
+          ref: ${{ steps.release-lock.outputs.jawaka_commit }}
+          path: Jawaka
+
+      - name: Checkout pinned Leaf
+        uses: actions/checkout@v4
+        with:
+          repository: Utility-Muffin-Research-Kitchen/Leaf
+          ref: ${{ steps.release-lock.outputs.leaf_commit }}
+          path: Leaf
+
+      - name: Check Python sources compile
+        working-directory: Leaf-RAOfflineProxy-Pak
+        run: |
+          python3 -m py_compile scripts/*.py
+          python3 -m py_compile src/raofflineproxy/*.py
+
+      # Cheap, and the one gate that protects a pak already on the card when
+      # Leaf is rolled back.
+      - name: Run the Leaf version gate test
+        working-directory: Leaf-RAOfflineProxy-Pak
+        run: make test-version-gate
+
+      # Every source input carries a URL, size and SHA-256, so the cache key is
+      # the lock files themselves: a re-pin invalidates it by construction and
+      # can never serve a stale archive.
+      - name: Cache locked source archives
+        uses: actions/cache@v4
+        with:
+          path: Leaf-RAOfflineProxy-Pak/workdir/sources
+          key: raop-sources-${{ hashFiles('Leaf-RAOfflineProxy-Pak/locks/*.json') }}
+
+      # Internal CI must stay useful when a locally pinned toolchain image has
+      # not been published to GHCR. A release tag is deliberately stricter:
+      # release.yml always requires this exact immutable manifest.
+      - name: Check pinned MLP1 toolchain availability
+        id: toolchain
+        env:
+          MLP1_TOOLCHAIN_IMAGE: ${{ steps.release-lock.outputs.toolchain }}
+        run: |
+          if docker manifest inspect "$MLP1_TOOLCHAIN_IMAGE" >/dev/null 2>&1; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Pinned MLP1 toolchain manifest is unavailable; skipping the package build in CI. Release builds remain strict."
+          fi
+
+      # Builds both packages and runs package_check. This also exercises the
+      # assembly qualifier, which fails the build if a pruned module, forbidden
+      # import or banned symbol reappears from upstream.
+      - name: Build and check both packages
+        if: steps.toolchain.outputs.available == 'true'
+        working-directory: Leaf-RAOfflineProxy-Pak
+        env:
+          MLP1_TOOLCHAIN_IMAGE: ${{ steps.release-lock.outputs.toolchain }}
+        run: make test-package
+
+      # Drives Jawaka's real Pak Rat client against a disposable two-version
+      # feed, rather than reimplementing the selection rule in a test.
+      - name: Qualify catalog version selection
+        if: steps.toolchain.outputs.available == 'true'
+        working-directory: Leaf-RAOfflineProxy-Pak
+        env:
+          MLP1_TOOLCHAIN_IMAGE: ${{ steps.release-lock.outputs.toolchain }}
+        run: make catalog-selection-smoke

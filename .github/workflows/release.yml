@@ -1,0 +1,166 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v0.*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout RAOfflineProxy pak
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          path: Leaf-RAOfflineProxy-Pak
+
+      - name: Read release lock
+        id: release-lock
+        working-directory: Leaf-RAOfflineProxy-Pak
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+
+          lock = json.load(open("release-lock.json", encoding="utf-8"))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              for key in ("catastrophe_commit", "jawaka_commit", "leaf_commit",
+                          "pak_version", "floor_version"):
+                  output.write(f"{key}={lock[key]}\n")
+              output.write(f"toolchain={lock['mlp1_toolchain_image']}\n")
+          PY
+
+      - name: Checkout pinned Catastrophe
+        uses: actions/checkout@v4
+        with:
+          repository: Utility-Muffin-Research-Kitchen/Catastrophe
+          ref: ${{ steps.release-lock.outputs.catastrophe_commit }}
+          path: Catastrophe
+
+      - name: Checkout pinned Jawaka
+        uses: actions/checkout@v4
+        with:
+          repository: Utility-Muffin-Research-Kitchen/Jawaka
+          ref: ${{ steps.release-lock.outputs.jawaka_commit }}
+          path: Jawaka
+
+      - name: Checkout pinned Leaf
+        uses: actions/checkout@v4
+        with:
+          repository: Utility-Muffin-Research-Kitchen/Leaf
+          ref: ${{ steps.release-lock.outputs.leaf_commit }}
+          path: Leaf
+
+      # This pak ships TWO packages under one install name: the real build and
+      # an ungated inert floor that pre-gating clients install instead. Both
+      # need a published artifact, so a tag names one or the other and the
+      # workflow builds exactly that one.
+      - name: Resolve which package this tag releases
+        id: target
+        env:
+          PAK_VERSION: ${{ steps.release-lock.outputs.pak_version }}
+          FLOOR_VERSION: ${{ steps.release-lock.outputs.floor_version }}
+        run: |
+          case "$GITHUB_REF_NAME" in
+            "v$PAK_VERSION")
+              echo "kind=real" >> "$GITHUB_OUTPUT"
+              echo "make_target=package-mlp1" >> "$GITHUB_OUTPUT"
+              echo "artifact=build/mlp1/RAOfflineProxy.mlp1.pak.zip" >> "$GITHUB_OUTPUT"
+              echo "package_dir=build/mlp1/package/RAOfflineProxy.pak" >> "$GITHUB_OUTPUT"
+              ;;
+            "v$FLOOR_VERSION")
+              echo "kind=floor" >> "$GITHUB_OUTPUT"
+              echo "make_target=package-floor-mlp1" >> "$GITHUB_OUTPUT"
+              echo "artifact=build/mlp1/floor/RAOfflineProxy.mlp1.pak.zip" >> "$GITHUB_OUTPUT"
+              echo "package_dir=build/mlp1/floor/package/RAOfflineProxy.pak" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "tag $GITHUB_REF_NAME matches neither the locked real version (v$PAK_VERSION) nor the floor (v$FLOOR_VERSION)" >&2
+              exit 2
+              ;;
+          esac
+
+      - name: Run the Leaf version gate test
+        working-directory: Leaf-RAOfflineProxy-Pak
+        run: make test-version-gate
+
+      - name: Build the tagged package
+        working-directory: Leaf-RAOfflineProxy-Pak
+        env:
+          MLP1_TOOLCHAIN_IMAGE: ${{ steps.release-lock.outputs.toolchain }}
+        run: make ${{ steps.target.outputs.make_target }}
+
+      # The handoff claims a specific ABI boundary: stock MLP1 libraries plus a
+      # bundled liblzma and our own CPython. Assert it, so a rebuild that
+      # quietly picks up another toolchain library cannot ship -- that failure
+      # would otherwise surface as a missing library on a user's device, after
+      # install.
+      #
+      # Computed as a set difference rather than a loop with early exits: a
+      # `find | while read` pipeline runs in a subshell, so an `exit` inside it
+      # cannot fail the step, and the audit would pass while printing errors.
+      - name: Audit the ABI boundary
+        working-directory: Leaf-RAOfflineProxy-Pak
+        env:
+          TOOLCHAIN: ${{ steps.release-lock.outputs.toolchain }}
+          PACKAGE_DIR: ${{ steps.target.outputs.package_dir }}
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo -e PACKAGE_DIR "$TOOLCHAIN" sh -euc '
+            READELF=/opt/mlp1-toolchain/bin/aarch64-buildroot-linux-gnu-readelf
+            elfs=$(mktemp); needed=$(mktemp); rpaths=$(mktemp)
+            find "$PACKAGE_DIR" -type f -exec sh -c "head -c 4 \"\$1\" | grep -q ELF && echo \"\$1\"" _ {} \; > "$elfs" || true
+            test -s "$elfs" || { echo "no ELF binaries found under $PACKAGE_DIR" >&2; exit 1; }
+            while read -r f; do
+              $READELF -d "$f" 2>/dev/null | sed -n "s/.*Shared library: \[\(.*\)\]/\1/p" >> "$needed"
+              $READELF -d "$f" 2>/dev/null | grep -E "RPATH|RUNPATH" >> "$rpaths" || true
+            done < "$elfs"
+            if [ -s "$rpaths" ]; then
+              echo "shipped binaries carry RPATH/RUNPATH, which would resolve outside the pak:" >&2
+              cat "$rpaths" >&2; exit 1
+            fi
+            printf "ld-linux-aarch64.so.1\nlibSDL2-2.0.so.0\nlibSDL2_image-2.0.so.0\nlibSDL2_ttf-2.0.so.0\nlibc.so.6\nlibcrypto.so.3\nlibexpat.so.1\nlibffi.so.8\nliblzma.so.5\nlibm.so.6\nlibpython3.13.so.1.0\nlibsqlite3.so.0\nlibssl.so.3\nlibz.so.1\n" | sort -u > /tmp/allowed
+            sort -u "$needed" > /tmp/needed
+            undeclared=$(comm -23 /tmp/needed /tmp/allowed)
+            if [ -n "$undeclared" ]; then
+              echo "undeclared shared-library dependencies:" >&2
+              echo "$undeclared" >&2; exit 1
+            fi
+            printf "ABI boundary ok (%s ELF files, %s distinct libraries)\n" \
+              "$(wc -l < "$elfs" | tr -d " ")" "$(wc -l < /tmp/needed | tr -d " ")"
+          '
+
+      - name: Create draft release
+        working-directory: Leaf-RAOfflineProxy-Pak
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT: ${{ steps.target.outputs.artifact }}
+          KIND: ${{ steps.target.outputs.kind }}
+        run: |
+          checksum_file="build/mlp1/SHA256SUMS"
+          notes="build/mlp1/release-notes.md"
+          sha256sum "$ARTIFACT" > "$checksum_file"
+          if [ "$KIND" = "floor" ]; then
+            summary='Inert compatibility floor. Carries no Python runtime, no service and no proxy: it shows a notice on Leaf releases too old to route to this pak, and exists so pre-gating Pak Rat clients install something harmless rather than the real build.'
+          else
+            summary='Experimental, casual-only offline RetroAchievements for Leaf on the Miniloong Pocket 1. Hardcore play always launches directly, unproxied.'
+          fi
+          printf '# RAOfflineProxy %s\n\n%s\n\n## SHA-256\n\n```\n' "$GITHUB_REF_NAME" "$summary" > "$notes"
+          cat "$checksum_file" >> "$notes"
+          printf '```\n' >> "$notes"
+          gh release create "$GITHUB_REF_NAME" \
+            "$ARTIFACT" \
+            "$checksum_file" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --verify-tag \
+            --title "RAOfflineProxy $GITHUB_REF_NAME" \
+            --notes-file "$notes"
