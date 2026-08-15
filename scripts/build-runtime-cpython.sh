@@ -175,7 +175,20 @@ container_main() {
     export LD_LIBRARY_PATH="$build:$deps_prefix/lib"
     export PYTHONPATH="$build/build/lib.linux-aarch64-$cpython_mm"
     export PYTHONDONTWRITEBYTECODE=1
-    ./python.exe - <<'PY'
+
+    # CPython names this binary python.exe only when configure detects a
+    # case-insensitive filesystem, where a plain "python" would collide with
+    # the Python/ directory. A bind mount from macOS APFS is case-insensitive
+    # and a CI runner's ext4 is not, so the same container produces a
+    # different name depending on the host the source tree came from.
+    interpreter=./python.exe
+    [ -x "$interpreter" ] || interpreter=./python
+    [ -x "$interpreter" ] || {
+      echo "no built interpreter: neither ./python.exe nor ./python" >&2
+      exit 1
+    }
+
+    "$interpreter" - <<'PY'
 import _lzma
 import _posixsubprocess
 import ctypes
