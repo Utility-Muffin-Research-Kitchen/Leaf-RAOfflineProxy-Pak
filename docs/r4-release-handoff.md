@@ -157,6 +157,39 @@ ship inside the pak under `licenses/`.
 convey source to anyone receiving the binary is satisfied by the URL `pak.json`
 already advertises.
 
+## The alpha decision (2026-08-15)
+
+Shipping on `v1.11.1-alpha1`, deliberately, with the reasoning recorded because
+"it was alpha" is the obvious later objection.
+
+The framing that made this decidable: **there is no stable upstream to wait
+for, and there never has been.** Of 30 upstream releases, 29 carry an `-alpha`
+tag, and upstream's own Linux documentation states the target "is currently in
+alpha" for every distro it supports. Releases land every 3-10 days, so any pin
+goes stale quickly regardless. "Wait for stable" is not a deferral; it is a
+decision never to ship.
+
+What makes that acceptable here rather than reckless:
+
+- The pak is qualified end to end on hardware, through the real Pak Rat install
+  path, including offline play and flush-on-reconnect.
+- **Hardcore never routes through the proxy.** A durable Hardcore setting
+  launches direct, and the gate fails closed when the shared config cannot be
+  read, so the worst case for a hardcore player is an unproxied launch.
+- The pak describes itself as experimental and casual-only in its own UI, and
+  the catalog description says so before install.
+- The award queue is signed and hash-chained, and flush is exactly-once
+  against a real account.
+
+What a user is actually accepting: a proxy whose upstream may change behaviour
+between releases, on a feature that only affects *casual* achievement
+unlocking. The bounded blast radius is what makes an alpha dependency
+tolerable, not the version number.
+
+Re-qualification on each upstream bump remains mandatory; the assembly
+qualifier enforces the mechanical half (no pruned module, forbidden import or
+banned symbol), and the device checks the rest.
+
 ## Upstream alpha caveats
 
 Upstream's Linux target is explicitly alpha and is moving quickly; the pin is
@@ -279,9 +312,8 @@ Ordered by dependency, because each step needs the one before it.
    Every comparable pak has `ci.yml` and `release.yml`; `VideoFromHell` is the
    closest model, since it also builds inside the pinned `mlp1-toolchain`
    image read from `release-lock.json` rather than on the runner.
-2. **Re-pin upstream deliberately.** The Linux target is still alpha. This is a
-   judgement call, not a task, and it is the one blocker that predates all the
-   others.
+2. ~~Re-pin upstream deliberately.~~ **Decided 2026-08-15: ship on
+   `v1.11.1-alpha1`.** See "The alpha decision" below.
 3. **Cut the release**: tag both the real version and the floor, and let the
    workflow attach `RAOfflineProxy.mlp1.pak.zip` for each.
 4. **Publish the catalog entry** in `leaf-docs/public/pakrat/v1/storefront.json`
