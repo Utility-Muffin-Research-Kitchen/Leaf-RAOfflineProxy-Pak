@@ -27,6 +27,7 @@
 
 #ifndef RAOFFLINEPROXY_FLOOR
 #include "cJSON.h"
+#include "ctl1_local.h"
 #include "http_local.h"
 
 /* The Leaf service adapter binds this port and nothing configures it away;
@@ -669,6 +670,20 @@ static void raop_screen_main(void) {
             snprintf(recents_value, sizeof(recents_value), "unavailable");
         }
 
+        raop_service_status service;
+        bool have_service = raop_ctl1_status(&service);
+        char service_value[48];
+        char autostart_value[32];
+        if (!have_service) {
+            snprintf(service_value, sizeof(service_value), "control unavailable");
+            snprintf(autostart_value, sizeof(autostart_value), "-");
+        } else {
+            snprintf(service_value, sizeof(service_value), "%s",
+                     raop_service_state_label(&service));
+            snprintf(autostart_value, sizeof(autostart_value), "%s",
+                     service.start_with_leaf ? "on" : "off");
+        }
+
         raop_status status;
         bool have_status = raop_fetch_status(&status);
         char status_value[96];
@@ -681,7 +696,15 @@ static void raop_screen_main(void) {
             snprintf(status_value, sizeof(status_value), "%s", status.state);
         }
 
+        /* Service controls lead, because a user opening this pak for the
+         * first time has a deliberately disabled service and nothing below
+         * works until it runs. Two rows, not one: "Start with Leaf" is a
+         * persisted preference that starts nothing, and running now does not
+         * imply it. Merging them would restate the exact confusion the launch
+         * bridge's routing gate got wrong twice. */
         cat_list_item items[] = {
+            { .label = "Service", .trailing_text = service_value },
+            { .label = "Start with Leaf", .trailing_text = autostart_value },
             { .label = "Prepare Recents and Favourites",
               .trailing_text = recents_value },
             { .label = "Prepare one game", .trailing_text = "browse library" },
@@ -693,7 +716,8 @@ static void raop_screen_main(void) {
             { .button = CAT_BTN_A, .label = "Select", .is_confirm = true },
         };
 
-        cat_list_opts opts = cat_list_default_opts("RAOfflineProxy", items, 4);
+        cat_list_opts opts = cat_list_default_opts("RAOfflineProxy", items,
+                                                   (int)(sizeof(items) / sizeof(items[0])));
         opts.footer = footer;
         opts.footer_count = 2;
         cat_list_result result;
@@ -710,6 +734,34 @@ static void raop_screen_main(void) {
         }
 
         if (choice == 0) {
+            /* Run/stop the process now. */
+            char message[256];
+            if (!have_service) {
+                raop_message(
+                    "Leaf's service control is not reachable.\n\n"
+                    "This usually means the launcher is still starting; try "
+                    "again in a moment.");
+            } else if (raop_service_is_up(&service)) {
+                if (!raop_ctl1_action("stop", message, sizeof(message))) {
+                    raop_message(message);
+                }
+            } else if (!raop_ctl1_action("run", message, sizeof(message))) {
+                raop_message(message);
+            }
+        } else if (choice == 1) {
+            /* Toggle the persisted autostart preference. Deliberately does
+             * not also start or stop the service: enable is a statement about
+             * future boots, and silently acting on this one would make the
+             * two rows lie about each other. */
+            char message[256];
+            if (!have_service) {
+                raop_message("Leaf's service control is not reachable.");
+            } else if (!raop_ctl1_action(
+                           service.start_with_leaf ? "disable" : "enable",
+                           message, sizeof(message))) {
+                raop_message(message);
+            }
+        } else if (choice == 2) {
             if (!have_recents) {
                 raop_message(error);
             } else if (recent_count == 0) {
@@ -725,12 +777,12 @@ static void raop_screen_main(void) {
                     raop_screen_progress();
                 }
             }
-        } else if (choice == 1) {
+        } else if (choice == 3) {
             raop_games_free(recents, recent_count);
             recents = NULL;
             recent_count = 0;
             raop_screen_pick_game();
-        } else if (choice == 2) {
+        } else if (choice == 4) {
             if (!have_status) {
                 raop_message(
                     "The RAOfflineProxy service is not running.\n\n"

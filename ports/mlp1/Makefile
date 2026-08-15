@@ -18,9 +18,9 @@ COMMON_SRC := src/ui_main.c $(CATASTROPHE_DIR)/include/cjson/cJSON.c
 # The floor screen states that it performs no network activity. It keeps that
 # promise by not linking the control client at all, rather than by leaving it
 # uncalled -- the binary is the claim, not the code path.
-UI_SRC := $(COMMON_SRC) src/http_local.c
+UI_SRC := $(COMMON_SRC) src/http_local.c src/ctl1_local.c
 FLOOR_SRC := $(COMMON_SRC)
-HDR := $(CATASTROPHE_DIR)/include/catastrophe.h $(CATASTROPHE_DIR)/include/catastrophe_widgets.h src/http_local.h
+HDR := $(CATASTROPHE_DIR)/include/catastrophe.h $(CATASTROPHE_DIR)/include/catastrophe_widgets.h src/http_local.h src/ctl1_local.h
 SDL_CFLAGS := $(shell $(PKG_CONFIG) --cflags sdl2 SDL2_ttf SDL2_image)
 SDL_LIBS := $(shell $(PKG_CONFIG) --libs sdl2 SDL2_ttf SDL2_image)
 CFLAGS := -std=gnu11 $(UMRK_MLP1_PROFILE_CFLAGS) -Wall -Wextra -Werror \
