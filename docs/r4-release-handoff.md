@@ -266,5 +266,32 @@ surfaced in a headless check:
 
 - Move-aside/promote-window failure under disk exhaustion (see step 4).
 - Suspend/resume and crash-restart cycles for the service.
-- The foreground pak UI, which has never been opened on device.
-- R5 offline pre-caching, planned and not started.
+
+The pak UI and R5 offline pre-caching were listed here until 2026-08-15; both
+are now qualified on hardware. See the R5 section above.
+
+## Still required before a release can be cut
+
+Ordered by dependency, because each step needs the one before it.
+
+1. **The repo has no `.github/workflows/`.** There is no CI gate and, more to
+   the point, no release workflow, so pushing a tag today publishes nothing.
+   Every comparable pak has `ci.yml` and `release.yml`; `VideoFromHell` is the
+   closest model, since it also builds inside the pinned `mlp1-toolchain`
+   image read from `release-lock.json` rather than on the runner.
+2. **Re-pin upstream deliberately.** The Linux target is still alpha. This is a
+   judgement call, not a task, and it is the one blocker that predates all the
+   others.
+3. **Cut the release**: tag both the real version and the floor, and let the
+   workflow attach `RAOfflineProxy.mlp1.pak.zip` for each.
+4. **Publish the catalog entry** in `leaf-docs/public/pakrat/v1/storefront.json`
+   with the real GitHub release URLs, sizes and SHA-256s, then run
+   `scripts/validate-pakrat-catalog.mjs --remote`. Pages deploys on push, which
+   is what serves `https://leaf.game/pakrat/v1/`.
+5. **Write the user-facing page** at
+   `leaf-docs/src/content/docs/app-store/raofflineproxy.md`, alongside the
+   seven existing app-store pages.
+
+The two-version shape (gated real build over an ungated inert floor) is already
+qualified against Jawaka's own client; step 4 is transcribing a proven shape to
+production URLs, not designing one.
