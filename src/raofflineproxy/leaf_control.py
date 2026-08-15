@@ -80,20 +80,51 @@ def handle_precache_request(server, command: str, path: str, body: str) -> bytes
     return _json(404, {"error": "unknown control route"})
 
 
+#: Cap on a single picker page. Large enough for the biggest system on the
+#: qualification device (ARCADE, 375) with room to spare, small enough that a
+#: broad search cannot hand the UI a list it has to scroll forever.
+MAX_PICKER_GAMES = 500
+
+
 def _games(query: dict) -> bytes:
     scope = (query.get("scope") or ["recents"])[0]
+    system = (query.get("system") or [""])[0].strip()
+    search = (query.get("q") or [""])[0].strip()
+
     with LibraryReader() as library:
+        if scope == "systems":
+            return _json(
+                200,
+                {
+                    "scope": scope,
+                    "schema_version": library.schema_version,
+                    "total_games": library.game_count(),
+                    "systems": [
+                        {"system": name, "count": count}
+                        for name, count in library.systems()
+                    ],
+                },
+            )
         if scope == "all":
-            games = library.all_games()
+            games = library.all_games(
+                system=system or None, query=search or None, limit=MAX_PICKER_GAMES + 1
+            )
         elif scope == "recents":
             games = library.recents_and_favourites()
         else:
             return _json(400, {"error": f"unknown scope {scope!r}"})
 
+        truncated = len(games) > MAX_PICKER_GAMES
+        if truncated:
+            games = games[:MAX_PICKER_GAMES]
+
         return _json(
             200,
             {
                 "scope": scope,
+                "system": system,
+                "q": search,
+                "truncated": truncated,
                 "schema_version": library.schema_version,
                 "total_games": library.game_count(),
                 "games": [

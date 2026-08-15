@@ -272,91 +272,207 @@ static void raop_message(const char *text) {
     (void)cat_confirmation(&options, &result);
 }
 
-/* Live progress. The run belongs to the service, so leaving this screen only
- * stops watching -- it never stops the work. "Stop" is explicit and separate,
- * because a user backing out of a screen has not asked to discard the API
- * calls already spent. */
+/* Live progress, on a hand-rolled loop rather than cat_options_list.
+ *
+ * The widget's refresh_interval_ms arms cat_request_frame_in exactly once, at
+ * entry. The first cat_present consumes that scheduled redraw and clears it,
+ * so every later idle sleep runs to Catastrophe's default wake -- the next
+ * wall-clock minute boundary. Measured on device: the screen sat unchanged for
+ * 11.7 s and then 40 s while a run advanced underneath it, updating only when
+ * a button press woke the loop. Re-arming every frame, the way the Syncthing
+ * pak's live screens do, is what actually keeps a polling screen live.
+ *
+ * The run belongs to the service, so leaving this screen only stops watching.
+ * "Stop" is separate and explicit, because backing out of a screen is not a
+ * request to discard the API calls already spent.
+ */
 static void raop_screen_progress(void) {
-    char values[7][160];
-    cat_option options[7];
-    cat_options_item items[7];
-
     static const char *labels[7] = {
         "State", "Progress", "Current", "Cached", "Already cached",
         "No RA data", "Failed",
     };
+    char values[7][160];
 
     cat_footer_item footer[] = {
         { .button = CAT_BTN_B, .label = "Back" },
         { .button = CAT_BTN_X, .label = "Stop" },
     };
 
-    int selected = 0;
+    uint32_t next_poll = 0;
+    raop_status status;
+    bool have_status = false;
+
     for (;;) {
-        raop_status status;
-        if (!raop_fetch_status(&status)) {
-            raop_message("Lost contact with the RAOfflineProxy service.\n\n"
-                         "Any run in progress continues; reopen this screen to "
-                         "check on it.");
-            return;
+        uint32_t now = SDL_GetTicks();
+        if (now >= next_poll) {
+            have_status = raop_fetch_status(&status);
+            next_poll = now + 1000u;
         }
 
-        snprintf(values[0], sizeof(values[0]), "%s", status.state);
-        snprintf(values[1], sizeof(values[1]), "%d / %d", status.processed,
-                 status.total);
-        snprintf(values[2], sizeof(values[2]), "%s",
-                 status.current[0] ? status.current : "-");
-        snprintf(values[3], sizeof(values[3]), "%d", status.cached);
-        snprintf(values[4], sizeof(values[4]), "%d", status.skipped);
-        snprintf(values[5], sizeof(values[5]), "%d", status.unsupported);
-        snprintf(values[6], sizeof(values[6]), "%d", status.failed);
+        cat_input_event event;
+        while (cat_poll_input(&event)) {
+            if (!event.pressed) continue;
+            if (event.button == CAT_BTN_B) return;
+            if (event.button == CAT_BTN_X) {
+                raop_cancel();
+                next_poll = 0; /* reflect the cancel immediately */
+            }
+        }
 
+        if (!have_status) {
+            snprintf(values[0], sizeof(values[0]), "service not reachable");
+            for (int i = 1; i < 7; i++) values[i][0] = '\0';
+        } else {
+            snprintf(values[0], sizeof(values[0]), "%s", status.state);
+            snprintf(values[1], sizeof(values[1]), "%d / %d", status.processed,
+                     status.total);
+            snprintf(values[2], sizeof(values[2]), "%s",
+                     status.current[0] ? status.current : "-");
+            snprintf(values[3], sizeof(values[3]), "%d", status.cached);
+            snprintf(values[4], sizeof(values[4]), "%d", status.skipped);
+            snprintf(values[5], sizeof(values[5]), "%d", status.unsupported);
+            snprintf(values[6], sizeof(values[6]), "%d", status.failed);
+        }
+
+        cat_draw_background();
+        cat_draw_screen_title("Preparing for offline", NULL);
+        SDL_Rect content = cat_get_content_rect(true, true, false);
+        TTF_Font *label_font = cat_get_font(CAT_FONT_LARGE);
+        TTF_Font *value_font = cat_get_font(CAT_FONT_SMALL);
+        cat_theme *theme = cat_get_theme();
+        int row_h = CAT_DS(34);
+        int y = content.y;
         for (int i = 0; i < 7; i++) {
-            options[i].label = values[i];
-            options[i].value = values[i];
-            items[i].label = labels[i];
-            items[i].type = CAT_OPT_STANDARD;
-            items[i].options = &options[i];
-            items[i].option_count = 1;
-            items[i].selected_option = 0;
+            cat_draw_text(label_font, labels[i], content.x, y, theme->text);
+            int value_w = cat_measure_text(value_font, values[i]);
+            cat_draw_text(value_font, values[i],
+                          content.x + content.w - value_w, y + CAT_DS(4),
+                          theme->hint);
+            y += row_h;
         }
+        if (cat_hints_enabled_from_env()) cat_draw_footer(footer, 2);
 
-        cat_options_list_opts opts = {
-            .title = "Preparing for offline",
-            .items = items,
-            .item_count = 7,
-            .footer = footer,
-            .footer_count = 2,
-            .initial_selected_index = selected,
-            .action_button = CAT_BTN_X,
-            /* One second is frequent enough to feel live and slow enough that
-             * polling costs nothing next to the pacing between games. */
-            .refresh_interval_ms = 1000,
-        };
-        cat_options_list_result result;
-        (void)cat_options_list(&opts, &result);
-        selected = result.focused_index;
-
-        if (result.action == CAT_ACTION_BACK) {
-            return;
-        }
-        if (result.action == CAT_ACTION_TRIGGERED) {
-            raop_cancel();
-        }
+        /* Re-arm every frame: a single arming at entry is consumed by the
+         * first present, after which the idle sleep runs to the next minute. */
+        cat_request_frame_in(1000);
+        cat_present();
     }
 }
 
-static void raop_screen_pick_game(void) {
+/* Fetch the system list (system, count) for the picker's first screen. */
+static bool raop_fetch_systems(char names[][32], int counts[], int max,
+                               int *out_count, char *error, size_t error_size) {
+    *out_count = 0;
+    http_local_response response;
+    if (!http_local_request(RAOP_PORT, "GET", "/leaf/precache/games?scope=systems",
+                            NULL, &response)) {
+        snprintf(error, error_size,
+                 "Could not reach the RAOfflineProxy service.\n\n"
+                 "Enable it under Settings > Services, then try again.");
+        return false;
+    }
+    if (response.status != 200) {
+        raop_copy_error(response.body, error, error_size);
+        http_local_response_free(&response);
+        return false;
+    }
+    cJSON *root = cJSON_Parse(response.body);
+    http_local_response_free(&response);
+    if (!root) {
+        snprintf(error, error_size, "The service sent a malformed system list.");
+        return false;
+    }
+    const cJSON *array = cJSON_GetObjectItemCaseSensitive(root, "systems");
+    int n = cJSON_IsArray(array) ? cJSON_GetArraySize(array) : 0;
+    int filled = 0;
+    for (int i = 0; i < n && filled < max; i++) {
+        const cJSON *entry = cJSON_GetArrayItem(array, i);
+        const cJSON *name = cJSON_GetObjectItemCaseSensitive(entry, "system");
+        const cJSON *count = cJSON_GetObjectItemCaseSensitive(entry, "count");
+        if (!cJSON_IsString(name)) continue;
+        snprintf(names[filled], 32, "%s", name->valuestring);
+        counts[filled] = cJSON_IsNumber(count) ? count->valueint : 0;
+        filled++;
+    }
+    cJSON_Delete(root);
+    *out_count = filled;
+    return true;
+}
+
+/* Show a game list already narrowed by system or search, and prepare the
+ * chosen title. Narrowing happens service-side so the list that arrives is the
+ * list being shown: scrolling all 1,968 rows to reach one game is not a usable
+ * way to choose, and the largest single system here holds 375. */
+static void raop_screen_game_list(const char *title, const char *system,
+                                  const char *search) {
+    char path[256];
+    char query[128];
+    /* Percent-encode the few characters a title search can plausibly contain
+     * that would otherwise terminate or split the query string. */
+    size_t qi = 0;
+    for (const char *c = search ? search : ""; *c && qi + 4 < sizeof(query); c++) {
+        if ((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') ||
+            (*c >= '0' && *c <= '9') || *c == '-' || *c == '.' || *c == '_') {
+            query[qi++] = *c;
+        } else {
+            qi += (size_t)snprintf(query + qi, sizeof(query) - qi, "%%%02X",
+                                   (unsigned char)*c);
+        }
+    }
+    query[qi] = '\0';
+    snprintf(path, sizeof(path), "/leaf/precache/games?scope=all&system=%s&q=%s",
+             system ? system : "", query);
+
     char error[256];
     raop_game *games = NULL;
     int count = 0;
-    if (!raop_fetch_games("all", &games, &count, error, sizeof(error))) {
-        raop_message(error);
-        return;
+    {
+        http_local_response response;
+        if (!http_local_request(RAOP_PORT, "GET", path, NULL, &response)) {
+            raop_message("Could not reach the RAOfflineProxy service.");
+            return;
+        }
+        if (response.status != 200) {
+            raop_copy_error(response.body, error, sizeof(error));
+            http_local_response_free(&response);
+            raop_message(error);
+            return;
+        }
+        cJSON *root = cJSON_Parse(response.body);
+        http_local_response_free(&response);
+        if (!root) {
+            raop_message("The service sent a malformed game list.");
+            return;
+        }
+        const cJSON *array = cJSON_GetObjectItemCaseSensitive(root, "games");
+        int n = cJSON_IsArray(array) ? cJSON_GetArraySize(array) : 0;
+        if (n > RAOP_MAX_GAMES) n = RAOP_MAX_GAMES;
+        if (n > 0) {
+            games = calloc((size_t)n, sizeof(*games));
+            if (!games) {
+                cJSON_Delete(root);
+                raop_message("Out of memory building the game list.");
+                return;
+            }
+            for (int i = 0; i < n; i++) {
+                const cJSON *entry = cJSON_GetArrayItem(array, i);
+                const cJSON *id = cJSON_GetObjectItemCaseSensitive(entry, "id");
+                const cJSON *name = cJSON_GetObjectItemCaseSensitive(entry, "name");
+                const cJSON *sys = cJSON_GetObjectItemCaseSensitive(entry, "system");
+                if (!cJSON_IsNumber(id) || !cJSON_IsString(name)) continue;
+                games[count].id = id->valueint;
+                games[count].name = raop_strdup(name->valuestring);
+                games[count].system =
+                    raop_strdup(cJSON_IsString(sys) ? sys->valuestring : "");
+                count++;
+            }
+        }
+        cJSON_Delete(root);
     }
+
     if (count == 0) {
-        raop_message("No games in the library yet.\n\n"
-                     "Let Leaf finish scanning, then try again.");
+        raop_games_free(games, count);
+        raop_message("No matching games.");
         return;
     }
 
@@ -379,7 +495,7 @@ static void raop_screen_pick_game(void) {
     int cursor = 0;
     int scroll = 0;
     for (;;) {
-        cat_list_opts opts = cat_list_default_opts("Prepare one game", items, count);
+        cat_list_opts opts = cat_list_default_opts(title, items, count);
         opts.footer = footer;
         opts.footer_count = 2;
         opts.initial_index = cursor;
@@ -389,9 +505,7 @@ static void raop_screen_pick_game(void) {
         cursor = result.selected_index >= 0 ? result.selected_index : cursor;
         scroll = result.visible_start_index;
 
-        if (rc == CAT_CANCELLED || result.action == CAT_ACTION_BACK) {
-            break;
-        }
+        if (rc == CAT_CANCELLED || result.action == CAT_ACTION_BACK) break;
         if (result.action != CAT_ACTION_SELECTED || cursor < 0 || cursor >= count) {
             continue;
         }
@@ -409,6 +523,82 @@ static void raop_screen_pick_game(void) {
 
     free(items);
     raop_games_free(games, count);
+}
+
+/* Console first, then titles -- the same shape Leaf's scraper uses, and the
+ * only way a 1,968-game library is navigable with a d-pad. Search is the
+ * escape hatch for "I know the name". */
+static void raop_screen_pick_game(void) {
+    enum { MAX_SYSTEMS = 48 };
+    char names[MAX_SYSTEMS][32];
+    int counts[MAX_SYSTEMS];
+    int system_count = 0;
+    char error[256];
+
+    if (!raop_fetch_systems(names, counts, MAX_SYSTEMS, &system_count, error,
+                            sizeof(error))) {
+        raop_message(error);
+        return;
+    }
+    if (system_count == 0) {
+        raop_message("No games in the library yet.\n\n"
+                     "Let Leaf finish scanning, then try again.");
+        return;
+    }
+
+    char totals[MAX_SYSTEMS][16];
+    cat_list_item items[MAX_SYSTEMS];
+    for (int i = 0; i < system_count; i++) {
+        snprintf(totals[i], sizeof(totals[i]), "%d", counts[i]);
+        items[i].label = names[i];
+        items[i].metadata = NULL;
+        items[i].image = NULL;
+        items[i].selected = false;
+        items[i].background_image = NULL;
+        items[i].trailing_text = totals[i];
+        items[i].disabled = false;
+    }
+
+    cat_footer_item footer[] = {
+        { .button = CAT_BTN_B, .label = "Back" },
+        { .button = CAT_BTN_X, .label = "Search" },
+        { .button = CAT_BTN_A, .label = "Open", .is_confirm = true },
+    };
+
+    int cursor = 0;
+    int scroll = 0;
+    for (;;) {
+        cat_list_opts opts = cat_list_default_opts("Choose a console", items,
+                                                   system_count);
+        opts.footer = footer;
+        opts.footer_count = 3;
+        opts.initial_index = cursor;
+        opts.visible_start_index = scroll;
+        opts.action_button = CAT_BTN_X;
+        cat_list_result result;
+        int rc = cat_list(&opts, &result);
+        cursor = result.selected_index >= 0 ? result.selected_index : cursor;
+        scroll = result.visible_start_index;
+
+        if (rc == CAT_CANCELLED || result.action == CAT_ACTION_BACK) break;
+
+        if (result.action == CAT_ACTION_TRIGGERED) {
+            cat_keyboard_result typed;
+            if (cat_keyboard("", "Search game titles", CAT_KB_GENERAL, &typed) == CAT_OK
+                && typed.text[0]) {
+                char title[96];
+                /* The keyboard returns up to 1 KB; a title is a heading,
+                 * not a transcript. */
+                snprintf(title, sizeof(title), "Search: %.80s", typed.text);
+                raop_screen_game_list(title, "", typed.text);
+            }
+            continue;
+        }
+        if (result.action == CAT_ACTION_SELECTED && cursor >= 0 &&
+            cursor < system_count) {
+            raop_screen_game_list(names[cursor], names[cursor], "");
+        }
+    }
 }
 
 static void raop_screen_main(void) {

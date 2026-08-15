@@ -160,22 +160,60 @@ class LibraryReader:
         )
         return [self._to_game(row) for row in rows]
 
-    def all_games(self) -> list[LibraryGame]:
-        """Every game, for the per-game picker.
+    def systems(self) -> list[tuple[str, int]]:
+        """(system, game count), most populous first.
 
-        The qualification device holds 1,968 rows; that is small enough to read
-        in one pass and large enough that the caller must not treat this as a
-        set to pre-cache in bulk. See the plan's rate-limit note.
+        The picker leads with this because scrolling 1,968 rows to reach one
+        game is not a usable way to choose: the device's largest system alone
+        holds 375. Filtering to a console first is how Leaf's own scraper
+        presents the same library.
         """
         rows = self._query(
             """
-            SELECT id, name, system, rom_path, NULL AS last_opened,
-                   0 AS is_recent, 0 AS is_favourite
+            SELECT system, count(*) AS n
               FROM games
-             ORDER BY system COLLATE NOCASE, name COLLATE NOCASE
+             GROUP BY system
+             ORDER BY n DESC, system COLLATE NOCASE
             """
         )
-        return [self._to_game(row) for row in rows]
+        return [(str(row["system"]), int(row["n"])) for row in rows]
+
+    def all_games(
+        self, system: str | None = None, query: str | None = None, limit: int = 0
+    ) -> list[LibraryGame]:
+        """Games for the per-game picker, optionally narrowed.
+
+        Filtering happens here rather than in the UI so the list that crosses
+        the wire is already the one being shown -- the picker was unusable when
+        it had to hold and scroll every row.
+
+        This is a picker source, not a bulk pre-cache set: the caller still
+        sends one game at a time. See the plan's rate-limit note.
+        """
+        where = []
+        params: list = []
+        if system:
+            where.append("system = ? COLLATE NOCASE")
+            params.append(system)
+        if query:
+            # LIKE with an escaped pattern: a user searching for "100%" must
+            # not accidentally match everything.
+            escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            where.append("name LIKE ? ESCAPE '\\'")
+            params.append(f"%{escaped}%")
+
+        sql = (
+            "SELECT id, name, system, rom_path, NULL AS last_opened, "
+            "0 AS is_recent, 0 AS is_favourite FROM games"
+        )
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY system COLLATE NOCASE, name COLLATE NOCASE"
+        if limit > 0:
+            sql += " LIMIT ?"
+            params.append(int(limit))
+
+        return [self._to_game(row) for row in self._query(sql, tuple(params))]
 
     def game_by_id(self, game_id: int) -> LibraryGame | None:
         rows = self._query(
