@@ -14,8 +14,13 @@ UMRK_MLP1_PROFILE_CFLAGS ?= -O2 -mcpu=cortex-a55 -mtune=cortex-a55 -ffunction-se
 UMRK_MLP1_PROFILE_LDFLAGS ?= -Wl,--gc-sections
 endif
 
-SRC := src/ui_main.c $(CATASTROPHE_DIR)/include/cjson/cJSON.c
-HDR := $(CATASTROPHE_DIR)/include/catastrophe.h $(CATASTROPHE_DIR)/include/catastrophe_widgets.h
+COMMON_SRC := src/ui_main.c $(CATASTROPHE_DIR)/include/cjson/cJSON.c
+# The floor screen states that it performs no network activity. It keeps that
+# promise by not linking the control client at all, rather than by leaving it
+# uncalled -- the binary is the claim, not the code path.
+UI_SRC := $(COMMON_SRC) src/http_local.c
+FLOOR_SRC := $(COMMON_SRC)
+HDR := $(CATASTROPHE_DIR)/include/catastrophe.h $(CATASTROPHE_DIR)/include/catastrophe_widgets.h src/http_local.h
 SDL_CFLAGS := $(shell $(PKG_CONFIG) --cflags sdl2 SDL2_ttf SDL2_image)
 SDL_LIBS := $(shell $(PKG_CONFIG) --libs sdl2 SDL2_ttf SDL2_image)
 CFLAGS := -std=gnu11 $(UMRK_MLP1_PROFILE_CFLAGS) -Wall -Wextra -Werror \
@@ -26,14 +31,14 @@ LDFLAGS := $(UMRK_MLP1_PROFILE_LDFLAGS) $(SDL_LIBS) -lm
 
 all: $(BUILD_DIR)/bin/raofflineproxy-ui $(BUILD_DIR)/bin/raofflineproxy-floor
 
-$(BUILD_DIR)/bin/raofflineproxy-ui: $(SRC) $(HDR)
+$(BUILD_DIR)/bin/raofflineproxy-ui: $(UI_SRC) $(HDR)
 	@mkdir -p "$(BUILD_DIR)/bin"
-	$(CC) $(CFLAGS) -o "$@" $(SRC) $(LDFLAGS)
+	$(CC) $(CFLAGS) -Isrc -o "$@" $(UI_SRC) $(LDFLAGS)
 	$(STRIP) "$@"
 
-$(BUILD_DIR)/bin/raofflineproxy-floor: $(SRC) $(HDR)
+$(BUILD_DIR)/bin/raofflineproxy-floor: $(FLOOR_SRC) $(HDR)
 	@mkdir -p "$(BUILD_DIR)/bin"
-	$(CC) $(CFLAGS) -DRAOFFLINEPROXY_FLOOR -o "$@" $(SRC) $(LDFLAGS)
+	$(CC) $(CFLAGS) -Isrc -DRAOFFLINEPROXY_FLOOR -o "$@" $(FLOOR_SRC) $(LDFLAGS)
 	$(STRIP) "$@"
 
 clean:
