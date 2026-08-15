@@ -30,6 +30,8 @@
 #include "rc_hash.h"
 #include "rc_version.h"
 
+#include "raproxy_chd.h"
+
 #define RAPROXY_HASH_LEN 33
 
 int raproxy_hash_file(const char *path, uint32_t console_id, char *out) {

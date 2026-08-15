@@ -30,6 +30,8 @@
 #include "libchdr/cdrom.h"
 #include "rc_hash.h"
 
+#include "raproxy_chd.h"
+
 #define RAPROXY_MAX_TRACKS 99
 #define RAPROXY_CHD_TRACK_PADDING 4
 

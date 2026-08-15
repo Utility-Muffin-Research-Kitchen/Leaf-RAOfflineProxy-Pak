@@ -1,6 +1,6 @@
 --- a/linux/raofflineproxy/proxy_service.py
 +++ b/linux/raofflineproxy/proxy_service.py
-@@ -2,32 +2,25 @@
+@@ -2,33 +2,25 @@
  
  import json
  import logging
@@ -17,6 +17,7 @@
  
 -from . import cache_keys, log_uploader, storage_corruption
 -from .auth import resolve_credentials
+-from .boot import adopt_listen_socket
 +from . import cache_keys
  from .award_signing import sign_award
  from .config import (
@@ -35,7 +36,7 @@
  from .image_cache import (
      IMAGE_PATH_PREFIXES,
      resolve_cached_static_asset,
-@@ -47,23 +40,24 @@
+@@ -48,23 +40,24 @@
  )
  from .rom_cache import (
      build_achievement_game_ids,
@@ -65,7 +66,7 @@
      redact_form_tokens,
      redact_query_tokens,
      self_user_agent,
-@@ -73,6 +67,11 @@
+@@ -74,6 +67,11 @@
  LOGGER = logging.getLogger("raofflineproxy")
  MAX_REQUEST_BODY_BYTES = 1_048_576
  SOCKET_TIMEOUT_SECONDS = 30
@@ -77,7 +78,7 @@
  
  AWARD_ACTIONS = {"awardachievement", "submitlbentry"}
  FAKE_OFFLINE_SUCCESS_ACTIONS = {"ping", "postactivity"}
-@@ -203,9 +202,40 @@
+@@ -204,9 +202,40 @@
  
  class ThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
      allow_reuse_address = True
@@ -86,11 +87,11 @@
 +    # (block_on_close) instead of orphaned daemon threads.
 +    daemon_threads = False
 +    block_on_close = True
-+
+ 
 +    def __init__(self, *args, **kwargs) -> None:
 +        self._worker_gate = threading.BoundedSemaphore(MAX_REQUEST_WORKERS)
 +        super().__init__(*args, **kwargs)
-+
+ 
 +    def process_request(self, request, client_address):
 +        if not self._worker_gate.acquire(blocking=False):
 +            LOGGER.warning("Request worker gate full; refusing connection")
@@ -108,18 +109,18 @@
 +        except Exception:
 +            self._worker_gate.release()
 +            raise
- 
++
 +    def process_request_thread(self, request, client_address):
 +        try:
 +            super().process_request_thread(request, client_address)
 +        finally:
 +            self._worker_gate.release()
- 
++
 +
  class ProxyRequestHandler(BaseHTTPRequestHandler):
      server: "ProxyRuntimeServer"
  
-@@ -227,6 +257,18 @@
+@@ -228,6 +257,18 @@
              self.wfile.write(error_json(403, "loopback_only"))
              return
  
@@ -138,7 +139,7 @@
          if self.command not in {"GET", "POST"}:
              self.wfile.write(error_json(405, "method not allowed"))
              return
-@@ -267,6 +309,9 @@
+@@ -268,21 +309,46 @@
          self.config_data = dict(config_data)
          self.storage = storage
          self.running = True
@@ -148,10 +149,21 @@
          self.has_internet = False
          self.flush_lock = threading.Lock()
          self.pending_award_lock = threading.Lock()
-@@ -274,6 +319,31 @@
+         host = proxy_host(self.config_data)
          port = proxy_port(self.config_data)
-         super().__init__((host, port), ProxyRequestHandler)
- 
+-        inherited = adopt_listen_socket()
+-        super().__init__(
+-            (host, port),
+-            ProxyRequestHandler,
+-            bind_and_activate=inherited is None,
++        # Upstream adopts a socket pre-bound by its boot entrypoint so a
++        # boot-to-game device cannot refuse rcheevos' login before the service
++        # is up. Leaf has no such race -- jawakad only launches a title the
++        # user picked, and the launch bridge routes through the proxy only
++        # when the service is already healthy -- and boot.py is pruned, so
++        # this binds normally.
++        super().__init__((host, port), ProxyRequestHandler)
++
 +    def leaf_health_response(self) -> bytes:
 +        if not self.ready:
 +            return response_bytes(
@@ -175,12 +187,15 @@
 +                },
 +                separators=(",", ":"),
 +            )
-+        )
-+
+         )
+-        if inherited is not None:
+-            self.socket.close()
+-            self.socket = inherited
+-            self.server_address = self.socket.getsockname()
+ 
      def _proxy_base_url(self) -> str:
          cfg = getattr(self, "config_data", {})
-         return f"http://{proxy_host(cfg)}:{proxy_port(cfg)}"
-@@ -301,7 +371,9 @@
+@@ -311,7 +377,9 @@
          if result is None:
              return raw_response_bytes(204, b"", "application/octet-stream", "No Content")
          body_bytes, content_type = result
@@ -191,7 +206,7 @@
              schedule_image_download(url, clean_path, user_agent)
          return raw_response_bytes(200, body_bytes, content_type, "OK")
  
-@@ -309,12 +381,24 @@
+@@ -319,12 +387,24 @@
          self, method: str, path: str, raw_body: str, headers: dict[str, str]
      ) -> bytes:
          if is_static_asset_request(path):
@@ -218,10 +233,11 @@
              return raw_response_bytes(204, b"", "application/octet-stream", "No Content")
  
          user_agent = headers.get("User-Agent") or headers.get("user-agent")
-@@ -405,6 +489,16 @@
+@@ -414,6 +494,16 @@
+                 return raw_response_bytes(
                      upstream[1], upstream[3], upstream[4], upstream[2]
                  )
- 
++
 +        # Leaf: only casual achievement awards are queued. A leaderboard entry
 +        # carries no achievement id, so queueing one inserts an achievementId=0
 +        # row into pending_awards -- which collides with that column's UNIQUE
@@ -231,11 +247,10 @@
 +        if extract_action(path, raw_body) == "submitlbentry":
 +            LOGGER.info("Offline leaderboard submission refused (not queued)")
 +            return error_json(503, "offline_leaderboard_not_supported")
-+
+ 
          return self.queue_offline_award(path, raw_body, headers)
  
-     def schedule_post_award_refresh(
-@@ -467,6 +561,9 @@
+@@ -477,6 +567,9 @@
      def queue_offline_award(
          self, path: str, raw_body: str, headers: dict[str, str]
      ) -> bytes:
@@ -245,10 +260,12 @@
          queued = self.queue_award(path, raw_body, headers)
          if not queued:
              return error_json(500, "award_queue_failed")
-@@ -798,6 +895,40 @@
+@@ -806,7 +899,41 @@
+                 json.dumps({"Success": False, "Error": str(error)}).encode("utf-8"),
+                 "application/json",
                  json.dumps({"Success": False, "Error": str(error)}),
-             )
- 
++            )
++
 +    def pending_award_account_mismatch(
 +        self, path: str, raw_body: str
 +    ) -> str | None:
@@ -280,13 +297,12 @@
 +                "account_mismatch: pending awards belong to "
 +                + ", ".join(sorted(owners))
 +                + "; they must flush under their own account first"
-+            )
+             )
 +        return None
-+
+ 
      def queue_award(self, path: str, raw_body: str, headers: dict[str, str]) -> bool:
          achievement_id = int(extract_request_param(path, raw_body, "a") or "0")
-         pending_award_lock = getattr(self, "pending_award_lock", None)
-@@ -922,165 +1053,99 @@
+@@ -932,146 +1059,73 @@
              }
  
  
@@ -462,46 +478,53 @@
 +    slow or absent network can never delay the proxy becoming usable.
 +    """
      storage = Storage()
-     migrate_user_case_in_cache_keys(storage)
--    ensure_ra_proxy_chained(config_data)
+-    # Bind the listening port before any other startup work: on boot-to-game
+-    # devices the emulator can reach its RetroAchievements login before the
+-    # service is fully up, and a refused connection disables achievements for
+-    # the whole session. Once the socket listens, those connections queue.
++    migrate_user_case_in_cache_keys(storage)
      server = ProxyRuntimeServer(config_data, storage)
+-    LOGGER.info(
+-        "Proxy listening host=%s port=%s",
+-        proxy_host(config_data),
+-        proxy_port(config_data),
+-    )
+-    ensure_ra_proxy_chained(config_data)
      connectivity_monitor = ConnectivityMonitor(server)
 -    periodic_refresh = PeriodicRefresh(server)
  
      try:
+         serving_thread = threading.Thread(
+@@ -1080,27 +1134,24 @@
+             daemon=True,
+         )
+         serving_thread.start()
+-
+-        migrate_user_case_in_cache_keys(storage)
 -        initial_online = server.refresh_reachability(force_probe=True)
 -        save_online_state(initial_online)
 -        if initial_online:
 -            server.flush_pending_awards()
 -            retry_storage_corruption_report()
--        connectivity_monitor.start()
--        periodic_refresh.start()
--
--        if stop_event is None:
--            server.serve_forever(poll_interval=0.5)
--            return
--
-         serving_thread = threading.Thread(
-             target=server.serve_forever,
-             kwargs={"poll_interval": 0.5},
-             daemon=True,
-         )
-         serving_thread.start()
 +        server.ready = True
 +        LOGGER.info(
 +            "Proxy ready on %s:%s",
 +            proxy_host(config_data),
 +            proxy_port(config_data),
 +        )
-+        connectivity_monitor.start()
+         connectivity_monitor.start()
+-        periodic_refresh.start()
 +        connectivity_monitor.kick()
-+
-+        if stop_event is None:
-+            serving_thread.join()
+ 
+         if stop_event is None:
+             serving_thread.join()
+-        else:
+-            while not stop_event.wait(0.5):
+-                continue
 +            return
-+
-         while not stop_event.wait(0.5):
-             continue
+ 
++        while not stop_event.wait(0.5):
++            continue
          server.shutdown()
          serving_thread.join(timeout=5)
      finally:

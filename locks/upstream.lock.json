@@ -1,17 +1,17 @@
 {
   "schema": 1,
   "project": "misantronic/RAOfflineProxy",
-  "tag": "v1.11.0-alpha1",
-  "commit": "d2c22a7b86b1569efb283d1493224e368ba102be",
+  "tag": "v1.11.1-alpha1",
+  "commit": "be6898e6dc26338bf82421ff7602fd37932be449",
   "license": "GPL-3.0-only",
-  "license_url": "https://github.com/misantronic/RAOfflineProxy/blob/v1.11.0-alpha1/LICENSE",
-  "linux_target_status": "alpha (upstream designation); audited 2026-08-06 at v1.10.0-alpha2 in umrk-workspace/plans/RAOfflineProxy and re-audited 2026-08-14 at this tag",
+  "license_url": "https://github.com/misantronic/RAOfflineProxy/blob/v1.11.1-alpha1/LICENSE",
+  "linux_target_status": "alpha (upstream designation); audited 2026-08-06 at v1.10.0-alpha2 in umrk-workspace/plans/RAOfflineProxy, re-audited 2026-08-14 at v1.11.0-alpha1, and re-audited 2026-08-15 at this tag",
   "archive": {
     "type": "github-tag-tarball",
-    "url": "https://github.com/misantronic/RAOfflineProxy/archive/refs/tags/v1.11.0-alpha1.tar.gz",
-    "filename": "RAOfflineProxy-1.11.0-alpha1.tar.gz",
-    "size": 3152686,
-    "sha256": "a0a36a2e4ba8ba2ccb057da3b778f7345d341c62178e2563a883eaf1962eabc3"
+    "url": "https://github.com/misantronic/RAOfflineProxy/archive/refs/tags/v1.11.1-alpha1.tar.gz",
+    "filename": "RAOfflineProxy-1.11.1-alpha1.tar.gz",
+    "size": 3154353,
+    "sha256": "104732eda35feb048384701cdcc3c6e0b081f7fb8352fd09b6ed82e122f342fe"
   },
   "shipped_subtree": "linux/raofflineproxy",
   "excluded_from_production_import_graph": [

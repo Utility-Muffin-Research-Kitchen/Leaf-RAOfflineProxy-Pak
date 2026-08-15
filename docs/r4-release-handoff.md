@@ -12,7 +12,7 @@ fixture refuses to run if it ever does.
 
 | Input | Version | SHA-256 (first 16) | License |
 | --- | --- | --- | --- |
-| RAOfflineProxy (upstream) | `v1.11.0-alpha1` @ `d2c22a7b86b1` | `a0a36a2e4ba8ba2c…` | GPL-3.0-only |
+| RAOfflineProxy (upstream) | `v1.11.1-alpha1` @ `be6898e6dc26` | `104732eda35feb04…` | GPL-3.0-only |
 | CPython | 3.13.15 | `1e66a7945a48390e…` | PSF-2.0 |
 | XZ Utils / liblzma | 5.8.2 | `890966ec3f5d5cc1…` | liblzma 0BSD |
 | Mozilla CA store (via curl) | 2026-08-13 | `f66dff1bdf8f9606…` | MPL-2.0 |
@@ -153,20 +153,48 @@ work is therefore GPL-3.0-only, unlike the MIT UMRK paks. `LICENSE` carries the
 verbatim GPL text and `NOTICE` the copyright and third-party inventory; both
 ship inside the pak under `licenses/`.
 
-**Blocking for release:** the repository is private, while `pak.json` advertises
-its public URL and GPL-3.0 obliges conveying source to anyone who receives the
-binary. It must be public before any package ships.
+**Cleared 2026-08-15:** the repository is public, so the GPL-3.0 obligation to
+convey source to anyone receiving the binary is satisfied by the URL `pak.json`
+already advertises.
 
 ## Upstream alpha caveats
 
-Upstream's Linux target is explicitly alpha and was moving quickly; the pinned
-`v1.11.0-alpha1` is evidence of what was current, not a judgement that it is
-stable. Re-pin deliberately before release rather than inheriting this pin. The
-Leaf patch series removes upstream's daemon launcher, PID files, autostart,
+Upstream's Linux target is explicitly alpha and is moving quickly; the pin is
+evidence of what was current, not a judgement that it is stable. Re-pin
+deliberately before release rather than inheriting the current pin. The Leaf
+patch series removes upstream's daemon launcher, PID files, autostart,
 self-update, self-uninstall, log upload and RetroArch config access, and the
 assembly qualifier fails the build if any pruned module, forbidden import or
 banned symbol reappears — so an upstream bump is a re-qualification, not a
 version-string change.
+
+### v1.11.0-alpha1 → v1.11.1-alpha1 (2026-08-15)
+
+Eight upstream commits. **The only functional change reaching shipped code is
+`APP_VERSION`**, which is the `RAOfflineProxy/Linux/<version>` User-Agent tag.
+Every other change lands in code the pak prunes or replaces:
+
+| Upstream change | Why it does not reach us |
+| --- | --- |
+| Offline play breaking after the first queued award | Android only (`ProxyServer.kt`): an accept loop occupying a worker from a fixed pool, plus 3-second DB latch waits that fall through as cache misses. The Python service is thread-per-request over one sqlite connection guarded by an `RLock`, which blocks rather than timing out, and `flush_lock` is never taken by a lookup — so there is no path that turns a slow DB read into a false "no cached response". |
+| Boot prebind of the proxy port (`boot.py`) | Guards a boot-to-game race Leaf does not have: `jawakad` launches only a title the user picked, and the bridge proxies only when the service is already healthy. `boot.py` is pruned; the socket-adoption branch is patched out of `ProxyRuntimeServer.__init__`. |
+| OnionOS version block | Distro integration, pruned. |
+| `launch.log` collection | `log_uploader.py`, pruned. |
+| Serve-before-migrate reorder in `run_proxy_service` | Not adopted. Leaf's order is deliberate: storage migration completes before the listener opens, so the port answering implies migrated storage — the invariant the launch bridge's health gate depends on. |
+
+**Patch series:** two of thirteen hunks in `proxy_service.py.patch` rejected,
+both in regions the patch rewrites wholesale (the import block and the
+`ConnectivityMonitor`/`run_proxy_service` tail). Resolved against the new base
+and the patch regenerated; the reviewed tail was carried over verbatim rather
+than retyped.
+
+**Qualifier gap this found.** `proxy_service.py` began importing a module
+upstream invented between the two tags (`.boot`). It was neither allow-listed
+nor pruned, so it was silently dropped from the package, and because
+byte-compilation does not resolve imports the pak assembled clean — it would
+have died with `ImportError` on first start. The qualifier now requires every
+relative import to name a shipped module. Verified by mutation in both import
+forms; pruned modules still report as forbidden rather than merely unshipped.
 
 ## Not qualified
 
