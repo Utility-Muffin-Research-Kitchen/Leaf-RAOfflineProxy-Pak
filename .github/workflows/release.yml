@@ -14,7 +14,15 @@ concurrency:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    # arm64, deliberately. The pinned toolchain image is multi-arch, so on an
+    # x86_64 runner it runs as amd64 -- and CPython's configure then cannot
+    # execute the aarch64 test binaries it just compiled ("cannot run C
+    # compiled programs", exit 77). On an arm64 host those binaries run
+    # natively, which is why this build has always worked on the development
+    # machine and nowhere else. Building here the same way the artifact is
+    # actually produced is also the point: CI and release should not differ in
+    # host architecture.
+    runs-on: ubuntu-24.04-arm
 
     steps:
       - name: Checkout RAOfflineProxy pak
