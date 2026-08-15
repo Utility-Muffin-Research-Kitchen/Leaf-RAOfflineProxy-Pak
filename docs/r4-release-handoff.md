@@ -231,6 +231,37 @@ have died with `ImportError` on first start. The qualifier now requires every
 relative import to name a shipped module. Verified by mutation in both import
 forms; pruned modules still report as forbidden rather than merely unshipped.
 
+## R5 device qualification (2026-08-15)
+
+Pre-caching and the pak UI were qualified on hardware through the real Pak Rat
+install path, not a hand-promoted tree.
+
+| | |
+|---|---|
+| Install | Pak Rat from a local catalog fixture; `.pakrat-commit` marker and `pakrat_installs` record match on version, artifact sha256 and commit token |
+| Pre-cache | `ActRaiser 2` (never launched) cached to RA game 3408, then served offline against an unreachable upstream |
+| Console names | all 19 systems resolve through Jawaka's own three tiers |
+| Service controls | Run / Stop and Start with Leaf driven from the pak over CTL-1 |
+| Launch bridge | routing, exactly-once injection, forwarded traffic and exit restore |
+
+**Do not hand-promote over a Pak Rat-managed install.** Replacing the tree with
+`mv` leaves no `.pakrat-commit`, and jawakad's startup recovery then reports
+`inconsistent committed tree reason=commit-marker-unreadable` every 500 ms
+forever. It cost a debugging session here. Rebuild the artifact, regenerate the
+catalog fixture, and use **Reinstall** from the store; that is what the fixture
+is for, and it exercises the path users will take.
+
+Three UI defects came only from someone holding the device, and none would have
+surfaced in a headless check:
+
+1. The progress screen never refreshed itself — `cat_options_list`'s timed
+   refresh slept to the next wall-clock minute on exit (fixed upstream in
+   Catastrophe#9; this pak hand-rolls the screen regardless).
+2. A flat 1,968-game picker is not navigable with a d-pad.
+3. Starting the service left the menu reading "unavailable": CTL-1 `run`
+   returns at 24 ms while the control endpoints answer at ~1.8 s, and `cat_list`
+   blocks until input, so the stale value survived until the next keypress.
+
 ## Not qualified
 
 - Move-aside/promote-window failure under disk exhaustion (see step 4).
