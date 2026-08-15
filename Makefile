@@ -25,6 +25,7 @@ rchash-mlp1: fetch-sources
 
 ui-mlp1:
 	docker run --rm \
+		--user "$$(id -u):$$(id -g)" \
 		-v "$(WORKSPACE_ROOT):/workspace" \
 		-w "$(MLP1_CONTAINER_REPO)" \
 		"$(MLP1_TOOLCHAIN_IMAGE)" \

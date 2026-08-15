@@ -394,7 +394,14 @@ esac
 repo_container="/workspace/${ROOT#"$workspace_root"/}"
 
 jobs="$(default_jobs)"
+# Run as the invoking user, the way Leaf-Itchio-Pak does. Docker Desktop on
+# macOS maps bind-mount ownership to the host user, so a root container looks
+# fine there; on Linux the mount keeps the container's uid, and every later
+# host-side step -- copying the CA bundle in, packaging build/ up -- hits
+# "Permission denied" on a tree it supposedly owns.
 docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  -e HOME=/tmp \
   -e OUT_DIR_IN_CONTAINER="$out_dir_container" \
   -e SOURCES_DIR_IN_CONTAINER="$sources_dir_container" \
   -e CPYTHON_FILENAME="$cpython_filename" \
