@@ -205,11 +205,23 @@ move-aside/promote, then restarted through CTL-1:
 `managed_apps` on the device excludes RAOfflineProxy, which is the Leaf#42
 bootstrap/ownership invariant holding on real hardware rather than in a fixture.
 
-Two caveats stated rather than implied. The install was a raw promote, not a
+**Launch bridge re-exercised on the new build** (Balloon Kid, gambatte, game
+2184):
+
+| | |
+|---|---|
+| Routing | `service healthy; proxied launch` → `transient cheevos host + forced casual override` |
+| Per-launch config | `cheevos_custom_host = "127.0.0.1:8080"` — **1 occurrence**; hardcore `"false"` — 1 occurrence; `cheevos_token` absent |
+| First-wins in the wild | the shared config still carries `cheevos_custom_host = ""` at line 3324, so an appended override would have lost to that empty string silently — the case the strip-and-write-once fix exists for |
+| Traffic | `login2`, `achievementsets`, `startsession`, image, and a real `awardachievement` forwarded upstream; `h=0` throughout |
+| Award routing | went upstream rather than queueing — `pending_awards: 0`, cache grew 18 → 22 |
+| Exit restore | per-launch config unlinked; shared config unchanged at 3,325 lines with both keys at their original values; **0** occurrences of the proxy address |
+| Service across the session | same pgid, `restart_count` unchanged — no crash or restart |
+
+One caveat stated rather than implied: the install was a raw promote, not a
 TXN-1 transaction, so jawakad's `installed_package` still reports the R4
-catalog fixture's `0.1.2`; the install path itself was qualified at R4 and is
-unchanged by this bump. And the launch bridge was not re-exercised — that
-needs real gameplay.
+catalog fixture's `0.1.2`. The install path itself was qualified at R4 and is
+unchanged by this bump.
 
 **Qualifier gap this found.** `proxy_service.py` began importing a module
 upstream invented between the two tags (`.boot`). It was neither allow-listed
