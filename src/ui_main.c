@@ -274,13 +274,26 @@ static void raop_message(const char *text) {
 
 /* Live progress, on a hand-rolled loop rather than cat_options_list.
  *
- * The widget's refresh_interval_ms arms cat_request_frame_in exactly once, at
- * entry. The first cat_present consumes that scheduled redraw and clears it,
- * so every later idle sleep runs to Catastrophe's default wake -- the next
- * wall-clock minute boundary. Measured on device: the screen sat unchanged for
- * 11.7 s and then 40 s while a run advanced underneath it, updating only when
- * a button press woke the loop. Re-arming every frame, the way the Syncthing
- * pak's live screens do, is what actually keeps a polling screen live.
+ * History worth keeping, because the symptom was invisible from reading: this
+ * screen originally used the widget's refresh_interval_ms and sat frozen while
+ * a run advanced underneath it, updating only when a button was pressed. The
+ * widget selected CAT_ACTION_REFRESH on time, but its final cat_present() had
+ * no remaining redraw deadline and took the idle path, sleeping to the next
+ * wall-clock minute before returning -- measured at 11.7 s and 40 s.
+ *
+ * Catastrophe fixed that upstream (PR #9: request an active frame when the
+ * deadline fires), so refresh_interval_ms is now sound. This screen stays
+ * hand-rolled anyway, for two reasons that outlive the bug:
+ *
+ *   - It is a read-only status display, not a menu. cat_options_list draws a
+ *     selection pill on the focused row, which advertises an interaction that
+ *     does not exist here.
+ *   - Liveness then depends only on this loop, not on which Catastrophe the
+ *     pak happened to be built against. The failure mode of getting that wrong
+ *     is a silently stale screen, not a build error.
+ *
+ * Re-arming cat_request_frame_in every frame before cat_present is the same
+ * shape the Syncthing pak's live screens use.
  *
  * The run belongs to the service, so leaving this screen only stops watching.
  * "Stop" is separate and explicit, because backing out of a screen is not a
