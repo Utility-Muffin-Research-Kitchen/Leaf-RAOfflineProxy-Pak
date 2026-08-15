@@ -42,13 +42,23 @@ size_of() {
 default_jobs() {
   if [ -n "${BUILD_JOBS:-}" ]; then
     printf '%s\n' "$BUILD_JOBS"
-  elif command -v sysctl >/dev/null 2>&1; then
-    sysctl -n hw.ncpu
-  elif command -v nproc >/dev/null 2>&1; then
-    nproc
-  else
-    printf '4\n'
+    return
   fi
+  # nproc first, and every probe tolerant of failure. Linux HAS sysctl but has
+  # no hw.ncpu, so probing for the command and then trusting the query aborted
+  # the entire build under set -e -- on the host every CI runner uses, while
+  # working perfectly on the macOS dev machine.
+  if command -v nproc >/dev/null 2>&1 && jobs_value="$(nproc 2>/dev/null)" &&
+     [ -n "$jobs_value" ]; then
+    printf '%s\n' "$jobs_value"
+    return
+  fi
+  if command -v sysctl >/dev/null 2>&1 &&
+     jobs_value="$(sysctl -n hw.ncpu 2>/dev/null)" && [ -n "$jobs_value" ]; then
+    printf '%s\n' "$jobs_value"
+    return
+  fi
+  printf '4\n'
 }
 
 container_main() {
