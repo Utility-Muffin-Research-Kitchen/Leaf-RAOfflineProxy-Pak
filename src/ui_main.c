@@ -654,6 +654,38 @@ static void raop_screen_pick_game(void) {
     }
 }
 
+/* The footer's action label follows the focused row.
+ *
+ * A menu whose confirm button always reads "Select" is honest only where every
+ * row opens something. Two of these rows change device state the moment A is
+ * pressed -- one starts or stops a service, the other flips a persisted
+ * preference -- and "Select" tells the user nothing about which, or in which
+ * direction. Catastrophe calls this every frame with the cursor, so the label
+ * can name the actual consequence.
+ */
+typedef struct {
+    const raop_service_status *service;
+    bool have_service;
+    cat_footer_item *footer;
+} raop_menu_footer_ctx;
+
+static void raop_menu_footer_update(cat_list_opts *opts, int cursor,
+                                    void *userdata) {
+    raop_menu_footer_ctx *ctx = (raop_menu_footer_ctx *)userdata;
+    if (!ctx || !ctx->footer || !opts) {
+        return;
+    }
+    const char *label = "Select";
+    if (cursor == 0) {
+        label = !ctx->have_service ? "Retry"
+              : raop_service_is_up(ctx->service) ? "Stop" : "Run";
+    } else if (cursor == 1) {
+        label = !ctx->have_service ? "Retry"
+              : ctx->service->start_with_leaf ? "Turn off" : "Turn on";
+    }
+    ctx->footer[1].label = label;
+}
+
 static void raop_screen_main(void) {
     for (;;) {
         char error[256];
@@ -715,11 +747,18 @@ static void raop_screen_main(void) {
             { .button = CAT_BTN_B, .label = "Exit" },
             { .button = CAT_BTN_A, .label = "Select", .is_confirm = true },
         };
+        raop_menu_footer_ctx footer_ctx = {
+            .service = &service,
+            .have_service = have_service,
+            .footer = footer,
+        };
 
         cat_list_opts opts = cat_list_default_opts("RAOfflineProxy", items,
                                                    (int)(sizeof(items) / sizeof(items[0])));
         opts.footer = footer;
         opts.footer_count = 2;
+        opts.footer_update = raop_menu_footer_update;
+        opts.footer_update_userdata = &footer_ctx;
         cat_list_result result;
         int rc = cat_list(&opts, &result);
         int choice = result.selected_index;
@@ -786,8 +825,9 @@ static void raop_screen_main(void) {
             if (!have_status) {
                 raop_message(
                     "The RAOfflineProxy service is not running.\n\n"
-                    "Enable it under Settings > Services. Pre-caching needs the "
-                    "service, because the service owns the cache.");
+                    "Start it from the Service row on the main screen. "
+                    "Pre-caching needs the service, because the service owns "
+                    "the cache.");
             } else {
                 raop_screen_progress();
             }
@@ -795,8 +835,8 @@ static void raop_screen_main(void) {
             raop_message(
                 "Experimental, casual-only offline RetroAchievements.\n\n"
                 "Sign in under Leaf Settings > Accounts, launch one game online "
-                "so the pak learns your token, then enable RAOfflineProxy in "
-                "Settings > Services.\n\n"
+                "so the pak learns your token, then start the service from the "
+                "Service row and turn on Start with Leaf.\n\n"
                 "Preparing a game downloads its achievement data now so it can "
                 "be played offline later. Hardcore play always launches "
                 "directly, unproxied.");
@@ -841,8 +881,9 @@ int main(int argc, char **argv) {
     if (!raop_service_ready()) {
         raop_message(
             "RAOfflineProxy is installed but its service is not running.\n\n"
-            "Enable it under Settings > Services to proxy achievements and to "
-            "prepare games for offline play.");
+            "Start it from the Service row on the next screen, and turn on "
+            "Start with Leaf so it comes back on its own. Both are also in "
+            "Leaf Settings > Services.");
     }
     raop_screen_main();
 #endif
