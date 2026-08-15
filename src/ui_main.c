@@ -67,6 +67,32 @@ static char *raop_strdup(const char *value) {
     return copy;
 }
 
+/* Percent-encode a query-string value.
+ *
+ * Every parameter needs this, not just the search box. A system id is the ROM
+ * subfolder's name, taken verbatim from the directory entry with no character
+ * restriction, so a user with Roms/PC Engine CD/ has a system id containing
+ * spaces -- and a raw space in the request target ends the path and makes the
+ * request line invalid. Unreserved set per RFC 3986; everything else escaped.
+ */
+static void raop_url_encode(char *out, size_t out_size, const char *value) {
+    size_t i = 0;
+    if (out_size == 0) {
+        return;
+    }
+    for (const char *c = value ? value : ""; *c && i + 4 < out_size; c++) {
+        if ((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') ||
+            (*c >= '0' && *c <= '9') || *c == '-' || *c == '.' || *c == '_' ||
+            *c == '~') {
+            out[i++] = *c;
+        } else {
+            i += (size_t)snprintf(out + i, out_size - i, "%%%02X",
+                                  (unsigned char)*c);
+        }
+    }
+    out[i] = '\0';
+}
+
 /* -- service calls ------------------------------------------------------- */
 
 static bool raop_service_ready(void) {
@@ -429,23 +455,13 @@ static bool raop_fetch_systems(char names[][32], char labels[][64], int counts[]
  * way to choose, and the largest single system here holds 375. */
 static void raop_screen_game_list(const char *title, const char *system,
                                   const char *search) {
-    char path[256];
-    char query[128];
-    /* Percent-encode the few characters a title search can plausibly contain
-     * that would otherwise terminate or split the query string. */
-    size_t qi = 0;
-    for (const char *c = search ? search : ""; *c && qi + 4 < sizeof(query); c++) {
-        if ((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') ||
-            (*c >= '0' && *c <= '9') || *c == '-' || *c == '.' || *c == '_') {
-            query[qi++] = *c;
-        } else {
-            qi += (size_t)snprintf(query + qi, sizeof(query) - qi, "%%%02X",
-                                   (unsigned char)*c);
-        }
-    }
-    query[qi] = '\0';
+    char path[512];
+    char encoded_system[192];
+    char encoded_search[192];
+    raop_url_encode(encoded_system, sizeof(encoded_system), system);
+    raop_url_encode(encoded_search, sizeof(encoded_search), search);
     snprintf(path, sizeof(path), "/leaf/precache/games?scope=all&system=%s&q=%s",
-             system ? system : "", query);
+             encoded_system, encoded_search);
 
     char error[256];
     raop_game *games = NULL;
@@ -491,6 +507,14 @@ static void raop_screen_game_list(const char *title, const char *system,
                     cJSON_IsString(label) && label->valuestring[0]
                         ? label->valuestring
                         : (cJSON_IsString(sys) ? sys->valuestring : ""));
+                /* A NULL here would reach cat_list as a NULL label. Bail the
+                 * same way raop_fetch_games does rather than render it. */
+                if (!games[count].name || !games[count].system) {
+                    raop_games_free(games, count + 1);
+                    cJSON_Delete(root);
+                    raop_message("Out of memory building the game list.");
+                    return;
+                }
                 count++;
             }
         }
