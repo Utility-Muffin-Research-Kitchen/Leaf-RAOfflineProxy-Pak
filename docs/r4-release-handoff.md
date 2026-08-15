@@ -1,3 +1,23 @@
+## Released 2026-08-15
+
+| | |
+|---|---|
+| Real | `v0.1.0` — 9,322,048 bytes, sha256 `5ee5b7957c3a45f7…` |
+| Floor | `v0.0.1` — 109,673 bytes, sha256 `da4131120a414e6c…` |
+| Built by | `release.yml` on `ubuntu-24.04-arm`, from the pinned toolchain |
+| ABI audit | real: 68 ELF files / 14 libraries; floor: 1 / 6. No RPATH/RUNPATH |
+| Catalog | live at `https://leaf.game/pakrat/v1/storefront.json`, 8 apps |
+| Docs | `https://leaf.game/app-store/raofflineproxy/` |
+
+Catalog digests were taken by downloading each **published** asset and
+cross-checked against the `SHA256SUMS` each release publishes, so what the
+catalog claims is what a device actually fetches;
+`validate-pakrat-catalog.mjs --remote` confirms it against the live URLs.
+
+The catalog's legacy/base fields point at the ungated floor and `versions[]`
+offers the real build gated at `min_leaf_version 0.10.0`, which is the shape
+qualified against Jawaka's own client in step 1-2.
+
 # R4 — Pak Rat compatibility and release handoff
 
 **Date:** 2026-08-14
