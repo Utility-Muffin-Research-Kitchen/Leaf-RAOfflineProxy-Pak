@@ -44,6 +44,81 @@ LIBRARY_SCHEMA_VERSION = 6
 #: pre-cache action that reports the library as busy.
 BUSY_TIMEOUT_SECONDS = 2.0
 
+#: Jawaka's key for a user's own console rename, in ``system_settings``.
+SYSTEM_DISPLAY_NAME_KEY = "display_name"
+
+#: Console names mirroring Jawaka's ``kSystemDisplayNames``
+#: (``internal/launcher/system_names.c``). Duplicated rather than shared
+#: because there is no contract that exposes it, and inventing one would mean a
+#: new generic surface in jawakad -- exactly what this plan's locked boundaries
+#: avoid. The cost is drift: if Jawaka adds a console here, the pak shows the
+#: folder id until this list catches up, which is the same thing it does for
+#: any unknown system and is therefore safe rather than wrong.
+#:
+#: One deliberate divergence: Jawaka runs these through its i18n catalog, so a
+#: user in a translated locale sees 街机 where this shows "Arcade". The pak
+#: ships no translations. The other two tiers -- the user's own rename and the
+#: raw folder id -- are byte-identical to Jawaka's, and those are the ones a
+#: user has actually chosen.
+SYSTEM_DISPLAY_NAMES: dict[str, str] = {
+    "FC": "Nintendo Entertainment System",
+    "NES": "Nintendo Entertainment System",
+    "FDS": "Famicom Disk System",
+    "SFC": "Super Nintendo",
+    "SNES": "Super Nintendo",
+    "SFC_JP": "Super Famicom",
+    "N64": "Nintendo 64",
+    "GB": "Game Boy",
+    "GBC": "Game Boy Color",
+    "GBA": "Game Boy Advance",
+    "MGBA": "Game Boy Advance",
+    "SGB": "Super Game Boy",
+    "SUPA": "Super Nintendo",
+    "NDS": "Nintendo DS",
+    "VB": "Virtual Boy",
+    "MD": "Sega Genesis",
+    "GEN": "Sega Genesis",
+    "GENESIS": "Sega Genesis",
+    "MS": "Sega Master System",
+    "GG": "Game Gear",
+    "SEGACD": "Sega CD",
+    "32X": "Sega 32X",
+    "SATURN": "Sega Saturn",
+    "DC": "Dreamcast",
+    "SG1000": "SG-1000",
+    "PCE": "TurboGrafx-16",
+    "TG16": "TurboGrafx-16",
+    "PCECD": "TurboGrafx-CD",
+    "NEOGEO": "Neo Geo",
+    "NGP": "Neo Geo Pocket",
+    "NGPC": "Neo Geo Pocket Color",
+    "WS": "WonderSwan",
+    "WSC": "WonderSwan Color",
+    "PS": "PlayStation",
+    "PSX": "PlayStation",
+    "PSP": "PlayStation Portable",
+    "ATARI": "Atari 2600",
+    "ATARI2600": "Atari 2600",
+    "A2600": "Atari 2600",
+    "A5200": "Atari 5200",
+    "A7800": "Atari 7800",
+    "PROSYSTEM": "Atari 7800",
+    "SEVENTYEIGHTHUNDRED": "Atari 7800",
+    "LYNX": "Atari Lynx",
+    "JAGUAR": "Atari Jaguar",
+    "COLECO": "ColecoVision",
+    "INTV": "Intellivision",
+    "VECTREX": "Vectrex",
+    "C64": "Commodore 64",
+    "AMIGA": "Amiga",
+    "DOS": "MS-DOS",
+    "MSX": "MSX",
+    "ARCADE": "Arcade",
+    "MAME": "Arcade",
+    "FBNEO": "Arcade",
+    "PORTS": "Ports",
+}
+
 
 class LibraryUnavailable(RuntimeError):
     """The library cannot be read safely. Carries a user-facing reason."""
@@ -55,6 +130,9 @@ class LibraryGame:
     name: str
     system: str
     rom_path: str
+    #: The console as the user sees it in Jawaka. Same string, so the pak's
+    #: picker and the launcher do not disagree about what a console is called.
+    system_label: str = ""
     #: Why this game is in the set: "recent", "favourite", or "both". Purely
     #: for display -- the caching job treats every entry identically.
     source: str = ""
@@ -123,6 +201,44 @@ class LibraryReader:
     def __exit__(self, *exc_info: object) -> None:
         self.close()
 
+    # -- console names ---------------------------------------------------
+    def _display_overrides(self) -> dict[str, str]:
+        """The user's own console renames, read once per reader.
+
+        Jawaka resolves a console name in three tiers -- this override, then
+        its built-in table, then the raw folder id -- and the pak follows the
+        same order so the two never disagree about what a console is called.
+        """
+        cached = getattr(self, "_overrides_cache", None)
+        if cached is not None:
+            return cached
+        overrides: dict[str, str] = {}
+        try:
+            rows = self._db.execute(
+                "SELECT system, value FROM system_settings WHERE key = ?",
+                (SYSTEM_DISPLAY_NAME_KEY,),
+            )
+            for row in rows:
+                system = str(row["system"] or "")
+                value = str(row["value"] or "")
+                if system and value:
+                    overrides[system.upper()] = value
+        except sqlite3.Error:
+            # An older or newer launcher may not have this table. A missing
+            # rename is a cosmetic loss, not a reason to refuse the feature --
+            # unlike a schema mismatch on games, which would cache the wrong
+            # thing and is why that one fails closed.
+            overrides = {}
+        self._overrides_cache = overrides
+        return overrides
+
+    def display_name(self, system: str) -> str:
+        key = (system or "").upper()
+        override = self._display_overrides().get(key)
+        if override:
+            return override
+        return SYSTEM_DISPLAY_NAMES.get(key, system or "")
+
     # -- queries ---------------------------------------------------------
     def _query(self, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
         try:
@@ -160,7 +276,7 @@ class LibraryReader:
         )
         return [self._to_game(row) for row in rows]
 
-    def systems(self) -> list[tuple[str, int]]:
+    def systems(self) -> list[tuple[str, str, int]]:
         """(system, game count), most populous first.
 
         The picker leads with this because scrolling 1,968 rows to reach one
@@ -176,7 +292,10 @@ class LibraryReader:
              ORDER BY n DESC, system COLLATE NOCASE
             """
         )
-        return [(str(row["system"]), int(row["n"])) for row in rows]
+        return [
+            (str(row["system"]), self.display_name(str(row["system"])), int(row["n"]))
+            for row in rows
+        ]
 
     def all_games(
         self, system: str | None = None, query: str | None = None, limit: int = 0
@@ -226,8 +345,7 @@ class LibraryReader:
         )
         return self._to_game(rows[0]) if rows else None
 
-    @staticmethod
-    def _to_game(row: sqlite3.Row) -> LibraryGame:
+    def _to_game(self, row: sqlite3.Row) -> LibraryGame:
         recent = bool(row["is_recent"])
         favourite = bool(row["is_favourite"])
         if recent and favourite:
@@ -238,10 +356,12 @@ class LibraryReader:
             source = "recent"
         else:
             source = ""
+        system = str(row["system"])
         return LibraryGame(
             game_id=int(row["id"]),
             name=str(row["name"]),
-            system=str(row["system"]),
+            system=system,
+            system_label=self.display_name(system),
             rom_path=str(row["rom_path"]),
             source=source,
         )

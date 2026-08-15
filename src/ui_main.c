@@ -157,8 +157,13 @@ static bool raop_fetch_games(const char *scope, raop_game **out_games,
         }
         games[filled].id = id->valueint;
         games[filled].name = raop_strdup(name->valuestring);
-        games[filled].system =
-            raop_strdup(cJSON_IsString(system) ? system->valuestring : "");
+        {
+            const cJSON *label = cJSON_GetObjectItemCaseSensitive(entry, "label");
+            games[filled].system = raop_strdup(
+                cJSON_IsString(label) && label->valuestring[0]
+                    ? label->valuestring
+                    : (cJSON_IsString(system) ? system->valuestring : ""));
+        }
         if (!games[filled].name || !games[filled].system) {
             raop_games_free(games, filled + 1);
             cJSON_Delete(root);
@@ -373,8 +378,9 @@ static void raop_screen_progress(void) {
 }
 
 /* Fetch the system list (system, count) for the picker's first screen. */
-static bool raop_fetch_systems(char names[][32], int counts[], int max,
-                               int *out_count, char *error, size_t error_size) {
+static bool raop_fetch_systems(char names[][32], char labels[][64], int counts[],
+                               int max, int *out_count, char *error,
+                               size_t error_size) {
     *out_count = 0;
     http_local_response response;
     if (!http_local_request(RAOP_PORT, "GET", "/leaf/precache/games?scope=systems",
@@ -401,9 +407,14 @@ static bool raop_fetch_systems(char names[][32], int counts[], int max,
     for (int i = 0; i < n && filled < max; i++) {
         const cJSON *entry = cJSON_GetArrayItem(array, i);
         const cJSON *name = cJSON_GetObjectItemCaseSensitive(entry, "system");
+        const cJSON *label = cJSON_GetObjectItemCaseSensitive(entry, "label");
         const cJSON *count = cJSON_GetObjectItemCaseSensitive(entry, "count");
         if (!cJSON_IsString(name)) continue;
-        snprintf(names[filled], 32, "%s", name->valuestring);
+        snprintf(names[filled], 32, "%.31s", name->valuestring);
+        /* Fall back to the folder id, the same last resort Jawaka uses. */
+        snprintf(labels[filled], 64, "%.63s",
+                 cJSON_IsString(label) && label->valuestring[0]
+                     ? label->valuestring : name->valuestring);
         counts[filled] = cJSON_IsNumber(count) ? count->valueint : 0;
         filled++;
     }
@@ -472,11 +483,14 @@ static void raop_screen_game_list(const char *title, const char *system,
                 const cJSON *id = cJSON_GetObjectItemCaseSensitive(entry, "id");
                 const cJSON *name = cJSON_GetObjectItemCaseSensitive(entry, "name");
                 const cJSON *sys = cJSON_GetObjectItemCaseSensitive(entry, "system");
+                const cJSON *label = cJSON_GetObjectItemCaseSensitive(entry, "label");
                 if (!cJSON_IsNumber(id) || !cJSON_IsString(name)) continue;
                 games[count].id = id->valueint;
                 games[count].name = raop_strdup(name->valuestring);
-                games[count].system =
-                    raop_strdup(cJSON_IsString(sys) ? sys->valuestring : "");
+                games[count].system = raop_strdup(
+                    cJSON_IsString(label) && label->valuestring[0]
+                        ? label->valuestring
+                        : (cJSON_IsString(sys) ? sys->valuestring : ""));
                 count++;
             }
         }
@@ -544,12 +558,13 @@ static void raop_screen_game_list(const char *title, const char *system,
 static void raop_screen_pick_game(void) {
     enum { MAX_SYSTEMS = 48 };
     char names[MAX_SYSTEMS][32];
+    char labels[MAX_SYSTEMS][64];
     int counts[MAX_SYSTEMS];
     int system_count = 0;
     char error[256];
 
-    if (!raop_fetch_systems(names, counts, MAX_SYSTEMS, &system_count, error,
-                            sizeof(error))) {
+    if (!raop_fetch_systems(names, labels, counts, MAX_SYSTEMS, &system_count,
+                            error, sizeof(error))) {
         raop_message(error);
         return;
     }
@@ -563,7 +578,7 @@ static void raop_screen_pick_game(void) {
     cat_list_item items[MAX_SYSTEMS];
     for (int i = 0; i < system_count; i++) {
         snprintf(totals[i], sizeof(totals[i]), "%d", counts[i]);
-        items[i].label = names[i];
+        items[i].label = labels[i];
         items[i].metadata = NULL;
         items[i].image = NULL;
         items[i].selected = false;
@@ -609,7 +624,7 @@ static void raop_screen_pick_game(void) {
         }
         if (result.action == CAT_ACTION_SELECTED && cursor >= 0 &&
             cursor < system_count) {
-            raop_screen_game_list(names[cursor], names[cursor], "");
+            raop_screen_game_list(labels[cursor], names[cursor], "");
         }
     }
 }

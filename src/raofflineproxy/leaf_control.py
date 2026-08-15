@@ -100,8 +100,8 @@ def _games(query: dict) -> bytes:
                     "schema_version": library.schema_version,
                     "total_games": library.game_count(),
                     "systems": [
-                        {"system": name, "count": count}
-                        for name, count in library.systems()
+                        {"system": sid, "label": label, "count": count}
+                        for sid, label, count in library.systems()
                     ],
                 },
             )
@@ -132,6 +132,7 @@ def _games(query: dict) -> bytes:
                         "id": g.game_id,
                         "name": g.name,
                         "system": g.system,
+                        "label": g.system_label,
                         "source": g.source,
                     }
                     for g in games
