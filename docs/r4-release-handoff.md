@@ -188,6 +188,29 @@ both in regions the patch rewrites wholesale (the import block and the
 and the patch regenerated; the reviewed tail was carried over verbatim rather
 than retyped.
 
+**Device evidence (MLP1, 2026-08-15).** Installed over the R4 install with a
+move-aside/promote, then restarted through CTL-1:
+
+| | |
+|---|---|
+| Version actually loaded | `1.11.1-alpha1`, UA tag `RAOfflineProxy/Linux/1.11.1-alpha1` |
+| Import graph | `proxy_service` imports clean — the service starting at all is proof the `.boot` import is gone, since it would raise `ImportError` |
+| `boot.py` in the pak | absent |
+| Restart | clean stop (`status: 0`), new pgid, `restart_count: 1`, **14 ms** to `ready` |
+| Health | `{"ready":true}` on loopback |
+| User data across the update | `integrity_check ok`, 18 cached rows and `award_secret.key` unchanged — the key offline signing depends on |
+| Offline after a queued award | 10/10 assertions (see below) |
+| `libraproxy_rchash.so` | md5-identical to the installed build, so the hash lane needs no re-verification |
+
+`managed_apps` on the device excludes RAOfflineProxy, which is the Leaf#42
+bootstrap/ownership invariant holding on real hardware rather than in a fixture.
+
+Two caveats stated rather than implied. The install was a raw promote, not a
+TXN-1 transaction, so jawakad's `installed_package` still reports the R4
+catalog fixture's `0.1.2`; the install path itself was qualified at R4 and is
+unchanged by this bump. And the launch bridge was not re-exercised — that
+needs real gameplay.
+
 **Qualifier gap this found.** `proxy_service.py` began importing a module
 upstream invented between the two tags (`.boot`). It was neither allow-listed
 nor pruned, so it was silently dropped from the package, and because
