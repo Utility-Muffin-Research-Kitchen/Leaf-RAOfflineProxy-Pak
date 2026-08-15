@@ -68,7 +68,13 @@ mkdir -p "$rc_work" "$chd_work"
 tar xzf "$SOURCES_DIR/$rc_filename" -C "$rc_work" --strip-components=1
 tar xzf "$SOURCES_DIR/$chd_filename" -C "$chd_work" --strip-components=1
 
+# Run as the invoking user, the way Leaf-Itchio-Pak does. Docker Desktop on
+# macOS maps bind-mount ownership to the host user, so a root container looks
+# fine there; on Linux the mount keeps the container's uid, and every later
+# host-side step -- copying the CA bundle in, packaging build/ up -- hits
+# "Permission denied" on a tree it supposedly owns.
 docker run --rm \
+    --user "$(id -u):$(id -g)" \
     -v "$WORKSPACE_ROOT:/workspace" \
     -w "/workspace/$REPO_REL" \
     "$IMAGE" \
@@ -106,7 +112,8 @@ so="$OUT_DIR/libraproxy_rchash.so"
 # The ABI the pak binds, and the dependency boundary. Only libc is acceptable:
 # anything else would have to be bundled or proven present on stock MLP1, the
 # same rule the CPython runtime follows.
-docker run --rm -v "$WORKSPACE_ROOT:/workspace" -w "/workspace/$REPO_REL" "$IMAGE" \
+docker run --rm --user "$(id -u):$(id -g)" \
+    -v "$WORKSPACE_ROOT:/workspace" -w "/workspace/$REPO_REL" "$IMAGE" \
     sh -euc '
         NM=/opt/mlp1-toolchain/bin/aarch64-buildroot-linux-gnu-nm
         READELF=/opt/mlp1-toolchain/bin/aarch64-buildroot-linux-gnu-readelf

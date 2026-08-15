@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test-and-package:
+    # arm64, deliberately. The pinned toolchain image is multi-arch, so on an
+    # x86_64 runner it runs as amd64 -- and CPython's configure then cannot
+    # execute the aarch64 test binaries it just compiled ("cannot run C
+    # compiled programs", exit 77). On an arm64 host those binaries run
+    # natively, which is why this build has always worked on the development
+    # machine and nowhere else. Building here the same way the artifact is
+    # actually produced is also the point: CI and release should not differ in
+    # host architecture.
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout RAOfflineProxy pak
+        uses: actions/checkout@v4
+        with:
+          path: Leaf-RAOfflineProxy-Pak
+
+      # Siblings are pinned rather than tracked. A Catastrophe or Jawaka change
+      # must not be able to break -- or silently fix -- this pak's build without
+      # a deliberate bump in release-lock.json.
+      - name: Read release lock
+        id: release-lock
+        working-directory: Leaf-RAOfflineProxy-Pak
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+
+          lock = json.load(open("release-lock.json", encoding="utf-8"))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              for key in ("catastrophe_commit", "jawaka_commit", "leaf_commit"):
+                  output.write(f"{key}={lock[key]}\n")
+              output.write(f"toolchain={lock['mlp1_toolchain_image']}\n")
+          PY
+
+      - name: Checkout pinned Catastrophe
+        uses: actions/checkout@v4
+        with:
+          repository: Utility-Muffin-Research-Kitchen/Catastrophe
+          ref: ${{ steps.release-lock.outputs.catastrophe_commit }}
+          path: Catastrophe
+
+      - name: Checkout pinned Jawaka
+        uses: actions/checkout@v4
+        with:
+          repository: Utility-Muffin-Research-Kitchen/Jawaka
+          ref: ${{ steps.release-lock.outputs.jawaka_commit }}
+          path: Jawaka
+
+      - name: Checkout pinned Leaf
+        uses: actions/checkout@v4
+        with:
+          repository: Utility-Muffin-Research-Kitchen/Leaf
+          ref: ${{ steps.release-lock.outputs.leaf_commit }}
+          path: Leaf
+
+      - name: Check Python sources compile
+        working-directory: Leaf-RAOfflineProxy-Pak
+        run: |
+          python3 -m py_compile scripts/*.py
+          python3 -m py_compile src/raofflineproxy/*.py
+
+      # Cheap, and the one gate that protects a pak already on the card when
+      # Leaf is rolled back.
+      - name: Run the Leaf version gate test
+        working-directory: Leaf-RAOfflineProxy-Pak
+        run: make test-version-gate
+
+      # Every source input carries a URL, size and SHA-256, so the cache key is
+      # the lock files themselves: a re-pin invalidates it by construction and
+      # can never serve a stale archive.
+      - name: Cache locked source archives
+        uses: actions/cache@v4
+        with:
+          path: Leaf-RAOfflineProxy-Pak/workdir/sources
+          key: raop-sources-${{ hashFiles('Leaf-RAOfflineProxy-Pak/locks/*.json') }}
+
+      # Internal CI must stay useful when a locally pinned toolchain image has
+      # not been published to GHCR. A release tag is deliberately stricter:
+      # release.yml always requires this exact immutable manifest.
+      - name: Check pinned MLP1 toolchain availability
+        id: toolchain
+        env:
+          MLP1_TOOLCHAIN_IMAGE: ${{ steps.release-lock.outputs.toolchain }}
+        run: |
+          if docker manifest inspect "$MLP1_TOOLCHAIN_IMAGE" >/dev/null 2>&1; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Pinned MLP1 toolchain manifest is unavailable; skipping the package build in CI. Release builds remain strict."
+          fi
+
+      # Builds both packages and runs package_check. This also exercises the
+      # assembly qualifier, which fails the build if a pruned module, forbidden
+      # import or banned symbol reappears from upstream.
+      - name: Build and check both packages
+        if: steps.toolchain.outputs.available == 'true'
+        working-directory: Leaf-RAOfflineProxy-Pak
+        env:
+          MLP1_TOOLCHAIN_IMAGE: ${{ steps.release-lock.outputs.toolchain }}
+        run: make test-package
+
+      # Catalog version selection is NOT run here, and that is a gap worth
+      # stating rather than hiding behind a skipped step.
+      #
+      # The smoke drives Jawaka's real Pak Rat client, which means building
+      # jawaka-pakrat-smoke natively on the runner. That build currently fails
+      # on Linux -- PATH_MAX and O_CLOEXEC undeclared, missing limits.h/fcntl.h
+      # feature-test macros -- because Jawaka's host build has only ever been
+      # done on macOS. Installing libcurl headers is not enough; verified.
+      #
+      # Adding the step with continue-on-error would be worse than leaving it
+      # out: a step that always fails and is ignored trains everyone to ignore
+      # it. The coverage exists today via `make catalog-selection-smoke` run
+      # locally, and the selection rule is qualified on device (see
+      # docs/r4-release-handoff.md). Restore this step once Jawaka's host build
+      # is portable.

@@ -42,13 +42,23 @@ size_of() {
 default_jobs() {
   if [ -n "${BUILD_JOBS:-}" ]; then
     printf '%s\n' "$BUILD_JOBS"
-  elif command -v sysctl >/dev/null 2>&1; then
-    sysctl -n hw.ncpu
-  elif command -v nproc >/dev/null 2>&1; then
-    nproc
-  else
-    printf '4\n'
+    return
   fi
+  # nproc first, and every probe tolerant of failure. Linux HAS sysctl but has
+  # no hw.ncpu, so probing for the command and then trusting the query aborted
+  # the entire build under set -e -- on the host every CI runner uses, while
+  # working perfectly on the macOS dev machine.
+  if command -v nproc >/dev/null 2>&1 && jobs_value="$(nproc 2>/dev/null)" &&
+     [ -n "$jobs_value" ]; then
+    printf '%s\n' "$jobs_value"
+    return
+  fi
+  if command -v sysctl >/dev/null 2>&1 &&
+     jobs_value="$(sysctl -n hw.ncpu 2>/dev/null)" && [ -n "$jobs_value" ]; then
+    printf '%s\n' "$jobs_value"
+    return
+  fi
+  printf '4\n'
 }
 
 container_main() {
@@ -165,7 +175,20 @@ container_main() {
     export LD_LIBRARY_PATH="$build:$deps_prefix/lib"
     export PYTHONPATH="$build/build/lib.linux-aarch64-$cpython_mm"
     export PYTHONDONTWRITEBYTECODE=1
-    ./python.exe - <<'PY'
+
+    # CPython names this binary python.exe only when configure detects a
+    # case-insensitive filesystem, where a plain "python" would collide with
+    # the Python/ directory. A bind mount from macOS APFS is case-insensitive
+    # and a CI runner's ext4 is not, so the same container produces a
+    # different name depending on the host the source tree came from.
+    interpreter=./python.exe
+    [ -x "$interpreter" ] || interpreter=./python
+    [ -x "$interpreter" ] || {
+      echo "no built interpreter: neither ./python.exe nor ./python" >&2
+      exit 1
+    }
+
+    "$interpreter" - <<'PY'
 import _lzma
 import _posixsubprocess
 import ctypes
@@ -371,7 +394,14 @@ esac
 repo_container="/workspace/${ROOT#"$workspace_root"/}"
 
 jobs="$(default_jobs)"
+# Run as the invoking user, the way Leaf-Itchio-Pak does. Docker Desktop on
+# macOS maps bind-mount ownership to the host user, so a root container looks
+# fine there; on Linux the mount keeps the container's uid, and every later
+# host-side step -- copying the CA bundle in, packaging build/ up -- hits
+# "Permission denied" on a tree it supposedly owns.
 docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  -e HOME=/tmp \
   -e OUT_DIR_IN_CONTAINER="$out_dir_container" \
   -e SOURCES_DIR_IN_CONTAINER="$sources_dir_container" \
   -e CPYTHON_FILENAME="$cpython_filename" \
