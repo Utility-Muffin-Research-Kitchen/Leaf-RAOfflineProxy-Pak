@@ -33,14 +33,14 @@ need "$PYTHON"
 need tar
 need patch
 
-read -r archive_filename archive_sha < <("$PYTHON" - "$UPSTREAM_LOCK" <<'PY'
+read -r archive_filename content_sha content_scope < <("$PYTHON" - "$UPSTREAM_LOCK" <<'PY'
 import json
 import sys
 
 with open(sys.argv[1], "r", encoding="utf-8") as fp:
     lock = json.load(fp)
 archive = lock["archive"]
-print(archive["filename"], archive["sha256"])
+print(archive["filename"], archive["content_sha256"], archive["content_scope"])
 PY
 )
 
@@ -49,18 +49,35 @@ if [ ! -f "$archive" ]; then
   echo "missing upstream archive: $archive (run scripts/fetch-sources.sh)" >&2
   exit 1
 fi
-actual_sha="$(sha256_of "$archive")"
-if [ "$actual_sha" != "$archive_sha" ]; then
-  echo "upstream archive hash mismatch" >&2
-  echo "expected $archive_sha" >&2
-  echo "actual   $actual_sha" >&2
-  exit 1
-fi
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/raop-assemble.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/src"
 tar -xzf "$archive" -C "$work/src" --strip-components=1
+
+# Authoritative input check. The commit-tarball byte receipt is not a gate
+# because GitHub re-encodes tarballs; verify the extracted shipped subtree
+# instead. Patches below also apply with -F 0, so a content change cannot slip
+# through unnoticed.
+actual_content_sha="$("$PYTHON" - "$work/src/$content_scope" <<'PY'
+import hashlib
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+digest = hashlib.sha256()
+for path in sorted(p for p in root.rglob("*") if p.is_file()):
+    digest.update(path.relative_to(root).as_posix().encode() + b"\0")
+    digest.update(hashlib.sha256(path.read_bytes()).digest())
+print(digest.hexdigest())
+PY
+)"
+if [ "$actual_content_sha" != "$content_sha" ]; then
+  echo "upstream content hash mismatch for $content_scope" >&2
+  echo "expected $content_sha" >&2
+  echo "actual   $actual_content_sha" >&2
+  exit 1
+fi
 
 package_src="$work/src/linux/raofflineproxy"
 if [ ! -d "$package_src" ]; then

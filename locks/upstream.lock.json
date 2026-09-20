@@ -11,7 +11,10 @@
     "url": "https://github.com/misantronic/RAOfflineProxy/archive/4e9bab484e4d7be30b2dbc313aae94ca2f5f742a.tar.gz",
     "filename": "RAOfflineProxy-4e9bab484e4d.tar.gz",
     "size": 3357920,
-    "sha256": "cd53b7a24096f4a0588c9c7ec286e08b8b4c6e1e72abdf25c6789583401501c6"
+    "sha256": "cd53b7a24096f4a0588c9c7ec286e08b8b4c6e1e72abdf25c6789583401501c6",
+    "receipt_note": "size/sha256 are one measured receipt of the pinned commit tarball, not a build gate: GitHub re-encodes commit tarballs (observed 2026-09-20 CI fetch at 3357838 bytes, same extracted content). The authoritative input is content_sha256 over the extracted shipped subtree.",
+    "content_sha256": "ecd2094a0e3764a477cd28f73e2cea8e7a7ca7a95465dde3784208cbcca46a8e",
+    "content_scope": "linux/raofflineproxy"
   },
   "shipped_subtree": "linux/raofflineproxy",
   "excluded_from_production_import_graph": [
