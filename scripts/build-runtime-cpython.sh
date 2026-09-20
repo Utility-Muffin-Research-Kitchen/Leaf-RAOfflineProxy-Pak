@@ -510,8 +510,9 @@ epoch = int(sys.argv[1])
 root = sys.argv[2]
 for dirpath, dirnames, filenames in os.walk(root):
     for name in dirnames + filenames:
-        os.utime(os.path.join(dirpath, name), (epoch, epoch),
-                 follow_symlinks=False)
+        # No symlinks in the flattened runtime, so no follow_symlinks=False
+        # (which some platforms silently ignore for directories).
+        os.utime(os.path.join(dirpath, name), (epoch, epoch))
 PY
 (cd "$OUT_DIR/root" && zip -X -qr "$artifact" raofflineproxy)
 
