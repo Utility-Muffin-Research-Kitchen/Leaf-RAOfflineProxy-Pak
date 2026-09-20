@@ -96,10 +96,13 @@ for name in $allow_list; do
   cp "$package_src/$name" "$assemble_dir/$name"
 done
 
-# Leaf patch series, applied over the upstream tag at the tarball root.
+# Leaf patch series, applied over the locked upstream archive at the tarball
+# root. Zero fuzz: a hunk that only applies by guessing context is an
+# unreviewed rebase -- the default 2-line fuzz once placed the probe timeout
+# where upstream had rewritten the function around it.
 for patch_file in "$PATCHES_DIR"/*.patch; do
   [ -e "$patch_file" ] || continue
-  patch -s -d "$work/src" -p1 <"$patch_file"
+  patch -s -F 0 -d "$work/src" -p1 <"$patch_file"
 done
 
 for name in $allow_list; do
