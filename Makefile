@@ -24,12 +24,21 @@ rchash-mlp1: fetch-sources
 	./scripts/build-rchash.sh
 
 ui-mlp1:
+	@expected="$$( $(PYTHON) -c 'import json; print(json.load(open("release-lock.json"))["catastrophe_commit"])' )"; \
+	actual="$$( git -C "$(CATASTROPHE_DIR)" rev-parse HEAD 2>/dev/null || echo missing )"; \
+	if [ "$$actual" != "$$expected" ]; then \
+		echo "Catastrophe sibling must be at the release-lock commit $$expected, got $$actual." >&2; \
+		echo "An arbitrary sibling HEAD is not a reproducible input. Point CATASTROPHE_DIR" >&2; \
+		echo "at a checkout of the pinned commit (e.g. a git worktree) and retry." >&2; \
+		exit 1; \
+	fi
 	docker run --rm \
 		--user "$$(id -u):$$(id -g)" \
+		-e SOURCE_DATE_EPOCH="$$( $(PYTHON) -c 'import json; print(json.load(open("locks/runtime.lock.json"))["source_date_epoch"])' )" \
 		-v "$(WORKSPACE_ROOT):/workspace" \
 		-w "$(MLP1_CONTAINER_REPO)" \
 		"$(MLP1_TOOLCHAIN_IMAGE)" \
-		make -f ports/mlp1/Makefile BUILD_DIR=build/mlp1 CATASTROPHE_DIR=/workspace/Catastrophe
+		make -f ports/mlp1/Makefile BUILD_DIR=build/mlp1 CATASTROPHE_DIR=/workspace/$(notdir $(CATASTROPHE_DIR))
 
 package-platform:
 	@case "$(PLATFORM)" in \

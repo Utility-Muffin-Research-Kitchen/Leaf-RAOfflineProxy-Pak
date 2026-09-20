@@ -394,6 +394,12 @@ esac
 repo_container="/workspace/${ROOT#"$workspace_root"/}"
 
 jobs="$(default_jobs)"
+
+# SOURCE_DATE_EPOCH comes from the lock, never from the wall clock: without it
+# the CPython __DATE__/__TIME__ strings land inside the deterministic payload
+# and two clean builds of identical inputs compare different.
+source_date_epoch="$("$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_date_epoch"])' "$LOCK")"
+
 # Run as the invoking user, the way Leaf-Itchio-Pak does. Docker Desktop on
 # macOS maps bind-mount ownership to the host user, so a root container looks
 # fine there; on Linux the mount keeps the container's uid, and every later
@@ -402,6 +408,7 @@ jobs="$(default_jobs)"
 docker run --rm \
   --user "$(id -u):$(id -g)" \
   -e HOME=/tmp \
+  -e SOURCE_DATE_EPOCH="$source_date_epoch" \
   -e OUT_DIR_IN_CONTAINER="$out_dir_container" \
   -e SOURCES_DIR_IN_CONTAINER="$sources_dir_container" \
   -e CPYTHON_FILENAME="$cpython_filename" \
@@ -467,7 +474,10 @@ manifest = {
     "product": lock.get("product"),
     "kind": "cpython-runtime",
     "production": True,
-    "generated_at": datetime.now(timezone.utc).isoformat(),
+    # This manifest ships inside the installed payload, so it must be
+    # deterministic: no wall-clock fields, no machine paths. Build receipts
+    # live in the outer (unshipped) JSON next to the runtime ZIP.
+    "source_date_epoch": lock.get("source_date_epoch"),
     "target": lock.get("target", {}),
     "build": {
         "toolchain_image": image,

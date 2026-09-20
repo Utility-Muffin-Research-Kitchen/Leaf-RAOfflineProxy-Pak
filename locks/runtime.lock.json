@@ -127,5 +127,7 @@
     "hashlib",
     "subprocess",
     "zlib"
-  ]
+  ],
+  "source_date_epoch": 1789862400,
+  "source_date_epoch_note": "UTC 2026-09-20T00:00:00Z, set at the 2026-09-20 upstream re-pin. Exported as SOURCE_DATE_EPOCH by the runtime/rchash/UI builds so identical inputs produce identical binaries; bump deliberately, never generated at build time."
 }
