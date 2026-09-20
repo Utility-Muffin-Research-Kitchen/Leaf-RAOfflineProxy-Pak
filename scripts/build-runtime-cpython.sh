@@ -498,6 +498,21 @@ python_tag="python$(printf '%s' "$cpython_mm" | tr -d .)"
 artifact="$OUT_DIR/raofflineproxy-mlp1-runtime-$python_tag-aarch64-cpython-$cpython_version.zip"
 manifest="$OUT_DIR/raofflineproxy-mlp1-runtime-$python_tag-aarch64-cpython-$cpython_version.json"
 rm -f "$artifact" "$manifest"
+# 'zip -X' drops extra attributes, not mtimes: identical payload bytes from
+# two clean builds would still compare different. Pin every entry's mtime to
+# the lock's SOURCE_DATE_EPOCH before archiving, so the artifact is
+# byte-stable for identical inputs.
+"$PYTHON" - "$source_date_epoch" "$OUT_DIR/root/raofflineproxy" <<'PY'
+import os
+import sys
+
+epoch = int(sys.argv[1])
+root = sys.argv[2]
+for dirpath, dirnames, filenames in os.walk(root):
+    for name in dirnames + filenames:
+        os.utime(os.path.join(dirpath, name), (epoch, epoch),
+                 follow_symlinks=False)
+PY
 (cd "$OUT_DIR/root" && zip -X -qr "$artifact" raofflineproxy)
 
 "$PYTHON" - "$runtime_manifest" "$artifact" "$manifest" "$runtime" <<'PY'
