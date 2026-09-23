@@ -513,8 +513,13 @@ for dirpath, dirnames, filenames in os.walk(root):
         # No symlinks in the flattened runtime, so no follow_symlinks=False
         # (which some platforms silently ignore for directories).
         os.utime(os.path.join(dirpath, name), (epoch, epoch))
+# os.walk yields only the children; the archived top-level directory is an
+# entry too, and it still carried the wall-clock time of this build.
+os.utime(root, (epoch, epoch))
 PY
-(cd "$OUT_DIR/root" && zip -X -qr "$artifact" raofflineproxy)
+# ZIP entries store DOS local time, so the same epoch encodes differently on a
+# UTC CI runner and a developer machine in another zone. Archive in UTC.
+(cd "$OUT_DIR/root" && TZ=UTC zip -X -qr "$artifact" raofflineproxy)
 
 "$PYTHON" - "$runtime_manifest" "$artifact" "$manifest" "$runtime" <<'PY'
 import hashlib

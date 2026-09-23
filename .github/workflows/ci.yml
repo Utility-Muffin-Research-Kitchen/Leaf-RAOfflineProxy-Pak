@@ -113,6 +113,21 @@ jobs:
           MLP1_TOOLCHAIN_IMAGE: ${{ steps.release-lock.outputs.toolchain }}
         run: make test-package
 
+      # The independent arm64 half of the reproducibility gate: print what
+      # this runner built so it can be compared with two clean local builds.
+      # The pak ZIPs pin every entry to 1980-01-01; the runtime ZIP pins its
+      # entries to the lock's SOURCE_DATE_EPOCH in UTC.
+      - name: Print package identities
+        if: steps.toolchain.outputs.available == 'true'
+        working-directory: Leaf-RAOfflineProxy-Pak/build/mlp1
+        run: |
+          sha256sum RAOfflineProxy.mlp1.pak.zip floor/RAOfflineProxy.mlp1.pak.zip \
+            runtime/raofflineproxy-mlp1-runtime-*.zip rchash/libraproxy_rchash.so
+          for tree in package app; do
+            printf '%s tree ' "$tree"
+            (cd "$tree" && find . -type f | LC_ALL=C sort | xargs sha256sum | sha256sum)
+          done
+
       # Catalog version selection is NOT run here, and that is a gap worth
       # stating rather than hiding behind a skipped step.
       #
