@@ -435,7 +435,15 @@ cp "$SOURCES_DIR/$cacert_filename" "$runtime/ca-certificates.crt"
 
 chmod 755 "$runtime/bin/python" "$runtime/bin/python3" "$runtime/bin/python$cpython_mm" 2>/dev/null || true
 
-image_id="$(docker image inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || true)"
+# The lock pins the image by digest, and that digest is its identity. `docker
+# image inspect .Id` is not: it is a per-host config digest (Docker Desktop
+# and a GitHub runner report different ids for this same pinned image), which
+# made the shipped runtime manifest differ between otherwise identical builds.
+# Only an unpinned development override falls back to the local id.
+case "$IMAGE" in
+  *@sha256:*) image_id="${IMAGE##*@}" ;;
+  *) image_id="$(docker image inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || true)" ;;
+esac
 image_digest="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$IMAGE" 2>/dev/null | head -n 1 || true)"
 runtime_manifest="$runtime/.leaf-runtime-manifest.json"
 "$PYTHON" - "$LOCK" "$SOURCES_DIR" "$runtime_manifest" "$IMAGE" "$image_digest" "$image_id" <<'PY'
