@@ -6,8 +6,8 @@
 # key nothing ever asks for, which looks exactly like success until the user is
 # offline with nothing there.
 #
-# KNOWN_GOOD holds hashes RetroArch really sent through this proxy. Re-run this
-# whenever the rcheevos pin or the RetroArch build moves.
+# KNOWN_GOOD holds hashes the emulators really sent through this proxy. Re-run
+# this whenever the rcheevos pin, RetroArch or standalone Flycast moves.
 #
 #   sh scripts/device/r5-hash-agreement.sh
 set -eu
@@ -24,7 +24,7 @@ export UMRK_RUNTIME_PATH="${UMRK_RUNTIME_PATH:-/tmp/jawaka-runtime}"
 import sqlite3, sys, time
 from raofflineproxy.leaf_romhash import RomHasher, SYSTEM_CONSOLE_IDS
 
-# Hashes RetroArch itself sent through the proxy, captured during R3 gameplay.
+# Hashes the emulators themselves sent through the proxy during gameplay.
 KNOWN_GOOD = [
     ("/mnt/sdcard/Roms/MD/Aladdin (USA).zip", "MD",
      "a6fc42bd5d19e36e5d8a2d8c4f4e9d23"),
@@ -36,6 +36,16 @@ KNOWN_GOOD = [
      "6a480004891ae5d942e62afdbbbd1b52"),
     ("/mnt/sdcard/Roms/PS/Spyro the Dragon (USA).chd", "PS",
      "3e9eb765a7b2912e60c30f363f0a3574"),
+    # Dreamcast, as standalone Flycast v2.7 (rcheevos 11.6) sent them. The
+    # GDI is the same disc extracted with chdman. Sonic Adventure 2's
+    # low-density tracks are not multiples of 4 frames, so it only hashes when
+    # the CHD reader pads GD-ROM tracks like every other CD.
+    ("/mnt/sdcard/Roms/DC/Crazy Taxi (USA).chd", "DC",
+     "e0dc1587750ef747cc873230b96a50bb"),
+    ("/media/sdcard1/Roms/DC/Crazy Taxi (USA).gdi", "DC",
+     "e0dc1587750ef747cc873230b96a50bb"),
+    ("/media/sdcard1/Roms/DC/Sonic Adventure 2 (Europe) (En,Ja,Fr,De,Es).chd", "DC",
+     "7982b9cde5c45a838a8c656962505c8f"),
 ]
 
 hasher = RomHasher()
@@ -44,7 +54,7 @@ if not hasher.available:
 print("rcheevos %s" % hasher.rcheevos_version)
 
 failures = 0
-print("\n-- agreement with RetroArch --")
+print("\n-- agreement with the emulators --")
 for path, system, expected in KNOWN_GOOD:
     result = hasher.hash_rom(path, system)
     ok = result.hash == expected
