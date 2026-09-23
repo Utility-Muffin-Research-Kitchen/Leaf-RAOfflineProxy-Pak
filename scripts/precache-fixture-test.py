@@ -5,7 +5,7 @@
   against SDCARD_PATH (or the card library.db lives on); secondary-card rows
   are absolute and stay as they are.
 - A missing ROM, or a .gdi/.cue whose track file is gone, reports "missing",
-  never "No RA data" and never success.
+  never "Not supported" and never success.
 - A present disc that cannot be hashed stays "unsupported".
 
 Run: python3 scripts/precache-fixture-test.py (after scripts/assemble-app.sh)
@@ -31,7 +31,7 @@ os.environ.pop("SDCARD_PATH", None)
 sys.path.insert(0, str(APP.parent))
 
 from raofflineproxy import leaf_precache  # noqa: E402
-from raofflineproxy.leaf_library import LibraryReader  # noqa: E402
+from raofflineproxy.leaf_library import LibraryGame, LibraryReader  # noqa: E402
 from raofflineproxy.leaf_romhash import HashResult  # noqa: E402
 
 failures = []
@@ -152,6 +152,22 @@ check(outcome[5].status == "missing" and "NoBin.bin" in outcome[5].detail,
       "CUE with an absent bin -> missing")
 check(outcome[1].status == "unsupported" and job._hasher.last == str(card / "Roms/DC/Primary.gdi"),
       "present but unhashable disc -> unsupported, hashed at its resolved path")
+
+
+class ConsoleTable(Unhashable):
+    @staticmethod
+    def console_id(system):
+        return None if system == "SATURN" else 40
+
+
+job._hasher = ConsoleTable()
+saturn = LibraryGame(game_id=9, name="Saturn game", system="SATURN",
+                     rom_path=str(touch(card / "Roms" / "SS" / "Game.chd")))
+not_prepared = job._prepare_one(saturn, creds, "ua")
+check(not_prepared.status == "unsupported"
+      and not_prepared.detail == "SATURN games are not prepared by this pak",
+      "a system Leaf does not run through RetroAchievements says so, not 'no RA console'")
+job._hasher = Unhashable()
 
 for o in outcome.values():
     job._record(o)

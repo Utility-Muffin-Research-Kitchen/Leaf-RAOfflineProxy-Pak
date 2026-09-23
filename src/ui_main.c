@@ -338,7 +338,7 @@ static void raop_screen_progress(void) {
     enum { ROWS = 8 };
     static const char *labels[ROWS] = {
         "State", "Progress", "Current", "Cached", "Already cached",
-        "Missing files", "No RA data", "Failed",
+        "Missing files", "Not supported", "Failed",
     };
     char values[ROWS][160];
 

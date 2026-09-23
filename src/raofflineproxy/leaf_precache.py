@@ -254,7 +254,10 @@ class PrecacheJob:
 
         if hasher.console_id(game.system) is None:
             base.status = "unsupported"
-            base.detail = f"{game.system} has no RetroAchievements console"
+            # Absent from the console table because Leaf does not run that
+            # system through RetroAchievements (Saturn and N64 are standalone
+            # emulators), not because RetroAchievements lacks it.
+            base.detail = f"{game.system} games are not prepared by this pak"
             return base
 
         result = hasher.hash_rom(game.rom_path, game.system)
