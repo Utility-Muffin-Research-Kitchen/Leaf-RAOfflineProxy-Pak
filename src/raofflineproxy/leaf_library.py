@@ -23,9 +23,14 @@ schema coupling to another repo, and the point of this module is to make it
   busy timeout is short because the launcher is the writer that matters: if it
   holds the file, we wait briefly and give up rather than stall the UI.
 
-``rom_path`` is absolute and may point at **either** SD card -- on the
-qualification device the sampled rows sit on the secondary card while the
-launcher runs from the primary -- so nothing here may assume a root.
+``rom_path`` may point at **either** SD card -- on the qualification device
+most rows sit on the secondary card while the launcher runs from the primary.
+Secondary-card rows are absolute. Primary-card rows are stored relative to the
+launcher card (``Roms/<system>/...``) and resolve against ``SDCARD_PATH``, or
+failing that the card this ``library.db`` lives on
+(``<card>/.umrk/<platform>/library.db``). Taken as-is they resolved against
+the service's working directory, and every primary-card game read as "ROM
+file is missing".
 """
 
 from __future__ import annotations
@@ -157,10 +162,17 @@ def default_library_path() -> Path:
 class LibraryReader:
     """Opens library.db read-only, refusing any schema it was not built for."""
 
-    def __init__(self, path: str | os.PathLike[str] | None = None) -> None:
+    def __init__(
+        self,
+        path: str | os.PathLike[str] | None = None,
+        primary_root: str | os.PathLike[str] | None = None,
+    ) -> None:
         self._path = Path(path) if path is not None else default_library_path()
         if not self._path.is_file():
             raise LibraryUnavailable(f"no game library at {self._path}")
+        if primary_root is None:
+            primary_root = os.environ.get("SDCARD_PATH") or self._path.absolute().parents[2]
+        self._primary_root = Path(primary_root)
 
         try:
             # immutable=0: the launcher may be writing. mode=ro keeps this a
@@ -362,6 +374,11 @@ class LibraryReader:
             name=str(row["name"]),
             system=system,
             system_label=self.display_name(system),
-            rom_path=str(row["rom_path"]),
+            rom_path=self._resolve_rom_path(str(row["rom_path"])),
             source=source,
         )
+
+    def _resolve_rom_path(self, rom_path: str) -> str:
+        if not rom_path or os.path.isabs(rom_path):
+            return rom_path
+        return str(self._primary_root / rom_path)

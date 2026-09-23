@@ -238,6 +238,7 @@ typedef struct {
     int processed;
     int cached;
     int skipped;
+    int missing;
     int unsupported;
     int failed;
 } raop_status;
@@ -277,6 +278,7 @@ static bool raop_fetch_status(raop_status *status) {
         { "processed", &status->processed },
         { "cached", &status->cached },
         { "skipped", &status->skipped },
+        { "missing", &status->missing },
         { "unsupported", &status->unsupported },
         { "failed", &status->failed },
     };
@@ -333,11 +335,12 @@ static void raop_message(const char *text) {
  * request to discard the API calls already spent.
  */
 static void raop_screen_progress(void) {
-    static const char *labels[7] = {
+    enum { ROWS = 8 };
+    static const char *labels[ROWS] = {
         "State", "Progress", "Current", "Cached", "Already cached",
-        "No RA data", "Failed",
+        "Missing files", "No RA data", "Failed",
     };
-    char values[7][160];
+    char values[ROWS][160];
 
     cat_footer_item footer[] = {
         { .button = CAT_BTN_B, .label = "Back" },
@@ -367,7 +370,7 @@ static void raop_screen_progress(void) {
 
         if (!have_status) {
             snprintf(values[0], sizeof(values[0]), "service not reachable");
-            for (int i = 1; i < 7; i++) values[i][0] = '\0';
+            for (int i = 1; i < ROWS; i++) values[i][0] = '\0';
         } else {
             snprintf(values[0], sizeof(values[0]), "%s", status.state);
             snprintf(values[1], sizeof(values[1]), "%d / %d", status.processed,
@@ -376,8 +379,9 @@ static void raop_screen_progress(void) {
                      status.current[0] ? status.current : "-");
             snprintf(values[3], sizeof(values[3]), "%d", status.cached);
             snprintf(values[4], sizeof(values[4]), "%d", status.skipped);
-            snprintf(values[5], sizeof(values[5]), "%d", status.unsupported);
-            snprintf(values[6], sizeof(values[6]), "%d", status.failed);
+            snprintf(values[5], sizeof(values[5]), "%d", status.missing);
+            snprintf(values[6], sizeof(values[6]), "%d", status.unsupported);
+            snprintf(values[7], sizeof(values[7]), "%d", status.failed);
         }
 
         cat_draw_background();
@@ -388,7 +392,7 @@ static void raop_screen_progress(void) {
         cat_theme *theme = cat_get_theme();
         int row_h = CAT_DS(34);
         int y = content.y;
-        for (int i = 0; i < 7; i++) {
+        for (int i = 0; i < ROWS; i++) {
             cat_draw_text(label_font, labels[i], content.x, y, theme->text);
             int value_w = cat_measure_text(value_font, values[i]);
             cat_draw_text(value_font, values[i],
