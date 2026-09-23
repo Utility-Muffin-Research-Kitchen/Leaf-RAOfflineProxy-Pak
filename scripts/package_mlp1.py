@@ -8,9 +8,9 @@ import json
 from pathlib import Path, PurePosixPath
 import re
 import shutil
-import stat
 import tarfile
-import zipfile
+
+from deterministic_zip import write_zip
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -77,27 +77,6 @@ def assert_fat32_safe(package_dir: Path) -> None:
             raise SystemExit(f"case-colliding package names: {previous}, {relative}")
         seen[folded] = str(relative)
 
-
-def write_zip(package_dir: Path, archive_path: Path) -> None:
-    archive_path.parent.mkdir(parents=True, exist_ok=True)
-    archive_path.unlink(missing_ok=True)
-    with zipfile.ZipFile(
-        archive_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9
-    ) as output:
-        for path in sorted(package_dir.rglob("*")):
-            if not path.is_file():
-                continue
-            relative = PurePosixPath(package_dir.name) / path.relative_to(package_dir)
-            mode = 0o755 if path.stat().st_mode & stat.S_IXUSR else 0o644
-            info = zipfile.ZipInfo(str(relative), date_time=(1980, 1, 1, 0, 0, 0))
-            info.external_attr = (stat.S_IFREG | mode) << 16
-            info.create_system = 3
-            output.writestr(
-                info,
-                path.read_bytes(),
-                compress_type=zipfile.ZIP_DEFLATED,
-                compresslevel=9,
-            )
 
 
 def main() -> None:
