@@ -132,6 +132,19 @@ jobs:
           echo "--- package tree files"
           (cd package && find . -type f | LC_ALL=C sort | xargs sha256sum)
 
+      # The runtime's build-configuration record is the file most exposed to
+      # host differences; keep it (and the manifest that hashes it) so a
+      # mismatch can be diffed rather than guessed at.
+      - name: Upload runtime configuration record
+        if: steps.toolchain.outputs.available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-config-record
+          path: |
+            Leaf-RAOfflineProxy-Pak/build/mlp1/package/RAOfflineProxy.pak/runtime/lib/python3.13/_sysconfigdata__linux_aarch64-linux-gnu.py
+            Leaf-RAOfflineProxy-Pak/build/mlp1/package/RAOfflineProxy.pak/runtime/.leaf-runtime-manifest.json
+          include-hidden-files: true
+
       # Catalog version selection is NOT run here, and that is a gap worth
       # stating rather than hiding behind a skipped step.
       #
