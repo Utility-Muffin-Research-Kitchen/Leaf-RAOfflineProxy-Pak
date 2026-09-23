@@ -127,6 +127,10 @@ jobs:
             printf '%s tree ' "$tree"
             (cd "$tree" && find . -type f | LC_ALL=C sort | xargs sha256sum | sha256sum)
           done
+          # Per-file listing, so a mismatch against a local build names the
+          # files that differ instead of only an aggregate.
+          echo "--- package tree files"
+          (cd package && find . -type f | LC_ALL=C sort | xargs sha256sum)
 
       # Catalog version selection is NOT run here, and that is a gap worth
       # stating rather than hiding behind a skipped step.
