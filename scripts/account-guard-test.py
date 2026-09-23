@@ -8,6 +8,8 @@ never with another account's. Offline:
 - a second user's award is refused while the first user's awards are pending;
 - a leaderboard entry is refused and never queued (twice: no UNIQUE clash);
 - the owner's next award queues and chains to the previous one.
+And a sign-in while the probe says offline is answered from the cached login
+without first waiting on upstream (name resolution is unbounded).
 
 All accounts and tokens are synthetic; nothing touches the network.
 
@@ -218,6 +220,35 @@ with mock.patch.object(flusher, "http_post", fake_post), \
 check(not sent and outcome.flushed == 0 and outcome.pending_remaining == 1
       and "account_mismatch" in (outcome.last_error or ""),
       "owner's token missing: flush defers, sends nothing, keeps the award")
+
+# 5. Sign-in while offline: the cached login answers without forwarding.
+s = fresh_storage()
+learn_login(s, "synthA", 1000)
+forwarded = []
+
+
+def login_server(online: bool) -> types.SimpleNamespace:
+    server = types.SimpleNamespace(storage=s, config_data={})
+    server.is_online = lambda: online
+    server.forward_to_upstream_result = lambda *a: forwarded.append(a) or ("network_error",)
+    server.handle_online_request = lambda *a: b"HTTP/1.1 200 OK\r\n\r\nonline"
+    server.handle_offline_request = lambda *a: b"HTTP/1.1 503 x\r\n\r\n"
+    for name in ("process_proxy_request", "handle_offline_login", "handle_award_request"):
+        setattr(server, name, types.MethodType(getattr(ProxyRuntimeServer, name), server))
+    return server
+
+
+login = "r=login2&u=synthA&t=tok-syntha"
+forwarded.clear()
+r = login_server(False).process_proxy_request("POST", "/dorequest.php", login, headers)
+check(status_of(r) == 200 and b"tok-syntha" in r and not forwarded,
+      "offline sign-in answered from the cached login without an upstream attempt")
+forwarded.clear()
+login_server(False).process_proxy_request("POST", "/dorequest.php", "r=login2&u=synthC&t=x", headers)
+check(len(forwarded) == 1, "offline with no cached login still tries upstream")
+forwarded.clear()
+login_server(True).process_proxy_request("POST", "/dorequest.php", login, headers)
+check(len(forwarded) == 1, "online sign-in goes upstream first")
 
 if failures:
     print(f"\n{len(failures)} failure(s)")
