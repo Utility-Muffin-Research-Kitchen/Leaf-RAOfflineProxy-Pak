@@ -22,11 +22,13 @@ tags, and releases are not authorized by the plan.
   (`-p1` at the extracted tarball root):
   - `storage.py.patch` — SQLite `DELETE`/`FULL` enforced by read-back,
     startup `integrity_check`, quarantine-and-refuse on corruption, JSON
-    fallback disabled.
+    fallback disabled; learned logins looked up per user, or the most
+    recent sign-in, never whichever row the table returns first.
   - `network.py.patch` — 500 ms reachability probe bound; failed probes are
     cached, not repeated before every request.
   - `flusher.py.patch` — flushes use only tokens learned from proxied
-    traffic (no RetroArch cfg reads); single-account guard.
+    traffic (no RetroArch cfg reads); single-account guard: pending awards
+    flush with their owner's own token or wait.
   - `proxy_service.py.patch` — 4-worker bounded gate with non-daemon
     threads and `block_on_close`; fixed `/leaf/health` before normal
     dispatch; sparse pending-award connectivity sweeps (no idle polling);

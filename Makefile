@@ -9,7 +9,7 @@ FLOOR_PAK_VERSION ?= $(shell $(PYTHON) -c 'import json; print(json.load(open("re
 MIN_LEAF_VERSION ?= $(shell $(PYTHON) -c 'import json; print(json.load(open("release-lock.json"))["min_leaf_version"])')
 MIN_JAWAKA_VERSION ?= $(shell $(PYTHON) -c 'import json; print(json.load(open("release-lock.json"))["min_jawaka_version"])')
 
-.PHONY: fetch-sources runtime-mlp1 app-mlp1 ui-mlp1 package-platform package-mlp1 package-floor-mlp1 rchash-mlp1 catalog-fixture catalog-selection-smoke test-package test-version-gate test-network-fixtures clean
+.PHONY: fetch-sources runtime-mlp1 app-mlp1 ui-mlp1 package-platform package-mlp1 package-floor-mlp1 rchash-mlp1 catalog-fixture catalog-selection-smoke test-package test-version-gate test-network-fixtures test-account-guard clean
 
 fetch-sources:
 	./scripts/fetch-sources.sh
@@ -66,6 +66,9 @@ catalog-selection-smoke:
 
 test-network-fixtures: app-mlp1
 	$(PYTHON) scripts/network-fixture-test.py
+
+test-account-guard: app-mlp1
+	$(PYTHON) scripts/account-guard-test.py
 
 test-version-gate:
 	bash scripts/leaf-version-gate-test.sh

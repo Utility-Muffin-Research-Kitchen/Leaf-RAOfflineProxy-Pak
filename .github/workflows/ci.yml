@@ -79,6 +79,13 @@ jobs:
         working-directory: Leaf-RAOfflineProxy-Pak
         run: make test-network-fixtures
 
+      # Pending awards flush with their owner's own token after an account
+      # switch; offline hardcore, other-account and leaderboard entries are
+      # refused, never queued.
+      - name: Run the account guard fixtures
+        working-directory: Leaf-RAOfflineProxy-Pak
+        run: make test-account-guard
+
       # Every source input carries a URL, size and SHA-256, so the cache key is
       # the lock files themselves: a re-pin invalidates it by construction and
       # can never serve a stale archive.

@@ -8,10 +8,12 @@
  from .award_signing import public_key_base64, sign_award, verify_award
  from .config import FALLBACK_USER_AGENT, MAX_PROXY_PORT, upstream_host
  from .network import build_api_url, http_post
-@@ -42,6 +41,44 @@
+@@ -40,6 +39,47 @@
+ GENESIS_HASH = "genesis"
+ MAX_AWARD_OFFSET_SECONDS = 14 * 24 * 60 * 60
  LOGGER = logging.getLogger("raofflineproxy")
- 
- 
++
++
 +def award_username(award: dict) -> str | None:
 +    """The RetroAchievements username an award's request body belongs to."""
 +    user = extract_form_param(award.get("requestBody", ""), "u")
@@ -26,34 +28,35 @@
 +    auth.py credential ladder (RetroArch cfg scan, password re-login) is
 +    removed with auth.py itself.
 +
-+    Durable state is single-account while awards are pending: if any pending
-+    award belongs to a different user than the cached login, the flush defers
-+    until that account's awards are gone rather than cross-substituting a
-+    newer user's token.
++    Durable state is single-account while awards are pending: they flush only
++    with their owner's own learned login, looked up by name, never with
++    another account's token. The cache keeps a login row per user, so after
++    an account switch "the cached login" is not one row; if the owner's is
++    missing, the flush defers rather than cross-substituting.
 +    """
-+    credentials = storage.load_login_credentials()
-+    if credentials is None:
-+        return None, "no cached RetroAchievements token (play online once first)"
-+    cached_user = str(credentials.get("user", "")).lower()
 +    pending_users = {
 +        user for user in (award_username(award) for award in pending) if user
 +    }
-+    if pending_users and cached_user not in pending_users:
-+        owners = ", ".join(sorted(pending_users))
-+        return None, (
-+            f"account_mismatch: pending awards belong to {owners};"
-+            " they must flush under their own account"
-+        )
 +    if len(pending_users) > 1:
 +        owners = ", ".join(sorted(pending_users))
 +        return None, f"account_mismatch: pending awards span multiple users ({owners})"
++    if pending_users:
++        (owner,) = pending_users
++        credentials = storage.load_login_credentials_for(owner)
++        if credentials is None:
++            return None, (
++                f"account_mismatch: pending awards belong to {owner}, whose token"
++                " is not cached; they must flush under their own account"
++            )
++        return credentials, None
++    credentials = storage.load_login_credentials()
++    if credentials is None:
++        return None, "no cached RetroAchievements token (play online once first)"
 +    return credentials, None
-+
-+
+ 
+ 
  @dataclass
- class FlushOutcome:
-     flushed: int
-@@ -344,15 +381,23 @@
+@@ -344,15 +384,23 @@
          )
  
      user_agent = self_user_agent()
