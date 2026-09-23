@@ -113,7 +113,15 @@ container_main() {
     exit 1
   fi
 
-  local build="$out_dir/work/build"
+  # Configure in a directory on the container's own filesystem, never on the
+  # bind mount. CPython's configure asks whether its *build directory* is
+  # case-insensitive and, if so, names the build interpreter python.exe and
+  # records BUILDEXE, BUILDPYTHON, PYTHON_FOR_BUILD and TESTPYTHON with that
+  # name in _sysconfigdata. A macOS APFS mount folds case and a CI runner's
+  # ext4 does not, so the shipped runtime differed by host. The fixed path
+  # keeps every recorded build path identical wherever this runs.
+  local build=/tmp/raop-cpython-build
+  rm -rf "$build"
   mkdir -p "$build"
 
   local tool_cc="${CC:-aarch64-buildroot-linux-gnu-gcc}"
@@ -176,15 +184,11 @@ container_main() {
     export PYTHONPATH="$build/build/lib.linux-aarch64-$cpython_mm"
     export PYTHONDONTWRITEBYTECODE=1
 
-    # CPython names this binary python.exe only when configure detects a
-    # case-insensitive filesystem, where a plain "python" would collide with
-    # the Python/ directory. A bind mount from macOS APFS is case-insensitive
-    # and a CI runner's ext4 is not, so the same container produces a
-    # different name depending on the host the source tree came from.
-    interpreter=./python.exe
-    [ -x "$interpreter" ] || interpreter=./python
+    # The build directory is case-sensitive (see above), so configure never
+    # picks the python.exe name.
+    interpreter=./python
     [ -x "$interpreter" ] || {
-      echo "no built interpreter: neither ./python.exe nor ./python" >&2
+      echo "no built interpreter: ./python" >&2
       exit 1
     }
 
