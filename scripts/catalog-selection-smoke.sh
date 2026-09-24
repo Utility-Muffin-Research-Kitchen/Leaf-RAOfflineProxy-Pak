@@ -62,7 +62,11 @@ done
 curl -fsS "$BASE_URL/storefront.json" >/dev/null
 
 BUILD_DIR="build/raop-catalog-smoke"
-make -C "$JAWAKA_DIR" BUILD="$BUILD_DIR" jawaka-pakrat-smoke >/dev/null
+# gnu11 rather than Jawaka's default c11: the pinned Jawaka's host build uses
+# PATH_MAX and O_CLOEXEC without the feature-test macros strict c11 needs on
+# glibc (macOS exposes them regardless). The language mode is the only change;
+# the sources are the pinned ones.
+make -C "$JAWAKA_DIR" BUILD="$BUILD_DIR" CSTD=-std=gnu11 jawaka-pakrat-smoke >/dev/null
 SMOKE="$JAWAKA_DIR/$BUILD_DIR/bin/jawaka-pakrat-smoke"
 
 SD_ROOT="$TMP_ROOT/sd"
