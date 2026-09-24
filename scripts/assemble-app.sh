@@ -190,6 +190,47 @@ for path in sorted(package.glob("*.py")):
         if name in text:
             raise SystemExit(f"forbidden symbol {name!r} in {path.name}")
 
+# Distro detection and other programs' config readers (RetroArch, PPSSPP,
+# Dolphin, batocera/knulli, ROCKNIX, spruce/Onion/Allium/muOS paths) are
+# stripped from config.py by patches/app/config.py.patch. Checked here on the
+# identifiers and string constants of every shipped module, not on comments,
+# so a reader that upstream adds or renames fails the build instead of riding
+# along unused -- or used: proxy_port()'s default once probed for spruce.
+import re
+
+reader_name = re.compile(
+    r"^(running_on_\w+|spruce_\w+|_retroarch_cfg_lookup|detect_(retroarch_cfg|"
+    r"batocera_conf|rocknix_system_cfg|darkos_retroarch32_cfg|ppsspp_ini|"
+    r"dolphin_config_dir|dolphin_ini)|(DEFAULT_)?(ONION|ALLIUM|MUOS|BATOCERA|"
+    r"KNULLI|ROCKNIX|DARKOS|SPRUCE)_\w+|SDCARD_RETROARCH_CFG_CANDIDATES|"
+    r"MAGICX_MARKER|CPUINFO_PATH|OS_RELEASE_PATH)$"
+)
+reader_paths = ("/mnt/SDCARD", "/userdata/system", "/opt/muos", "/run/muos",
+                "/storage/.config", "/home/ark", "retroarch.cfg", "ppsspp.ini",
+                "batocera.conf", "knulli.conf", "/etc/os-release", "/proc/cpuinfo")
+for path in sorted(package.glob("*.py")):
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in ast.walk(tree):
+        names = []
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.append(node.name)
+        elif isinstance(node, ast.Name):
+            names.append(node.id)
+        elif isinstance(node, ast.Attribute):
+            names.append(node.attr)
+        elif isinstance(node, ast.alias):
+            names.append(node.name.split(".")[-1])
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            hit = next((p for p in reader_paths if p in node.value), None)
+            if hit:
+                raise SystemExit(f"config reader path {hit!r} in {path.name}:{node.lineno}")
+        for name in names:
+            if reader_name.match(name):
+                raise SystemExit(
+                    f"config reader {name!r} in {path.name}:"
+                    f"{getattr(node, 'lineno', '?')} (strip it in config.py.patch)"
+                )
+
 forcache = list(package.glob("**/__pycache__"))
 import shutil
 for cache in forcache:

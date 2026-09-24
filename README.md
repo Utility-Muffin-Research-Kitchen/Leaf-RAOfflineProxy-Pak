@@ -26,6 +26,11 @@ change, never from this README.
     startup `integrity_check`, quarantine-and-refuse on corruption, JSON
     fallback disabled; learned logins looked up per user, or the most
     recent sign-in, never whichever row the table returns first.
+  - `config.py.patch` — strips upstream's distro detection and its
+    RetroArch/PPSSPP/Dolphin/batocera/ROCKNIX config readers; the state
+    directory comes from `RAOFFLINEPROXY_CONFIG_DIR` and the port is fixed.
+    `assemble-app.sh` fails if any shipped module names such a reader or
+    path again.
   - `network.py.patch` — 500 ms reachability probe bound; failed probes are
     cached, not repeated before every request.
   - `flusher.py.patch` — flushes use only tokens learned from proxied

@@ -28,6 +28,7 @@
     "storage_corruption.py reporting path (quarantine retained, upload removed)",
     "image_cache.py on-disk cache and download scheduler",
     "knulli/ muos/ onion/ rocknix/ batocera integration scripts",
+    "config.py distro detection (running_on_*, spruce_*) and RetroArch/PPSSPP/Dolphin/batocera/ROCKNIX/DarkOS config readers (detect_*): stripped by patches/app/config.py.patch, enforced by the assembly qualifier",
     "retroarch_cfg.py / ppsspp_cfg.py / dolphin_cfg.py / batocera_conf.py / knulli_service.py / darkos_service.py / spruce_conf.py emulator config adapters",
     "boot.py listen-socket adoption (Leaf binds and gates on readiness instead)",
     "pending_awards.py (menu award UI)",
