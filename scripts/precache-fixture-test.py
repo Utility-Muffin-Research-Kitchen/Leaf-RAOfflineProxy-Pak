@@ -374,8 +374,10 @@ def prepare(job_, game, *answers):
 
 
 def no_rows_for(srv, rom_hash: str) -> bool:
-    """Nothing a launch reads beyond RA's own answer: no game id mapping."""
-    return srv.storage.get_cache(cache_keys.game_id(rom_hash)) is None
+    """Nothing a launch reads beyond RA's own answer: no game id mapping, and
+    no ``patch`` row for Flycast to load a game RetroAchievements lacks."""
+    return (srv.storage.get_cache(cache_keys.game_id(rom_hash)) is None
+            and not srv.storage.get_all_cache_by_prefix(cache_keys.PREFIX_PATCH))
 
 
 with LibraryReader(db_path, primary_root=card) as lib:
@@ -428,6 +430,9 @@ for game in nodata_games:
     retry, asked = prepare(job_, game, known)
     check(retry.status == "cached" and asked == ["achievementsets"],
           f"{label}: and the next run asks again and prepares it ({retry.status})")
+    wants_patch = game.system in leaf_precache.PATCH_CLIENT_SYSTEMS
+    check((("patch",) in later_calls) == wants_patch,
+          f"{label}: {'fetches' if wants_patch else 'does not fetch'} the patch row once known")
     third, asked = prepare(job_, game)
     check(third.status == "skipped" and asked == [],
           f"{label}: a game RetroAchievements does know stays 'already cached' "
