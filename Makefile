@@ -78,6 +78,7 @@ dist-source: fetch-sources
 # With DIST_SOURCE_REBUILD=1 the comparison needs this checkout's packages,
 # so they become prerequisites (built once per make invocation).
 test-dist-source: app-mlp1 dist-source $(if $(filter 1,$(DIST_SOURCE_REBUILD)),package-mlp1 package-floor-mlp1)
+	$(PYTHON) scripts/dist-source-determinism-test.py
 	bash scripts/dist-source-test.sh
 
 baseline-app:

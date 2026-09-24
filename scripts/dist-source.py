@@ -67,7 +67,23 @@ def git(*args: str, cwd: pathlib.Path) -> bytes:
                           capture_output=True).stdout
 
 
-def locked_inputs() -> list[dict]:
+def normalized_upstream(path: pathlib.Path, epoch: int) -> bytes:
+    """Keep the complete source, discarding GitHub's tar/gzip metadata."""
+    writer = Writer(epoch)
+    with tarfile.open(path) as source:
+        for member in source.getmembers():
+            if member.isdir():
+                continue
+            parts = pathlib.PurePosixPath(member.name).parts
+            if (not member.isfile() or len(parts) < 2 or
+                    member.name.startswith("/") or ".." in parts):
+                raise SystemExit(f"unsupported upstream source entry: {member.name}")
+            writer.add("upstream/" + "/".join(parts[1:]),
+                       source.extractfile(member).read(), bool(member.mode & 0o111))
+    return writer.bytes()
+
+
+def locked_inputs() -> list[tuple[dict, bytes]]:
     runtime = json.loads((ROOT / "locks" / "runtime.lock.json").read_text(encoding="utf-8"))
     upstream = json.loads((ROOT / "locks" / "upstream.lock.json").read_text(encoding="utf-8"))
     sources = ROOT / "workdir" / "sources"
@@ -77,8 +93,9 @@ def locked_inputs() -> list[dict]:
         if not path.is_file() or sha256_file(path) != item["sha256"]:
             raise SystemExit(f"{path} is missing or not the locked archive "
                              "(run scripts/fetch-sources.sh)")
-        inputs.append({"filename": item["filename"], "sha256": item["sha256"],
-                       "url": item["url"], "lock": "locks/runtime.lock.json"})
+        inputs.append(({"filename": item["filename"], "sha256": item["sha256"],
+                        "url": item["url"], "lock": "locks/runtime.lock.json"},
+                       path.read_bytes()))
     archive = upstream["archive"]
     path = sources / archive["filename"]
     if not path.is_file():
@@ -87,10 +104,11 @@ def locked_inputs() -> list[dict]:
     # extracted subtree is what the lock (and assemble-app.sh) gates on.
     if content_sha256(path, archive["content_scope"]) != archive["content_sha256"]:
         raise SystemExit(f"{path} does not carry the locked upstream content")
-    inputs.append({"filename": archive["filename"], "sha256": sha256_file(path),
-                   "content_sha256": archive["content_sha256"],
-                   "content_scope": archive["content_scope"], "url": archive["url"],
-                   "commit": upstream["commit"], "lock": "locks/upstream.lock.json"})
+    data = normalized_upstream(path, int(runtime["source_date_epoch"]))
+    inputs.append(({"filename": archive["filename"], "sha256": hashlib.sha256(data).hexdigest(),
+                    "content_sha256": archive["content_sha256"],
+                    "content_scope": archive["content_scope"], "url": archive["url"],
+                    "commit": upstream["commit"], "lock": "locks/upstream.lock.json"}, data))
     return inputs
 
 
@@ -116,8 +134,7 @@ class Writer:
                 self.add(f"{prefix}/{member.name}", source.extractfile(member).read(),
                          bool(member.mode & 0o111))
 
-    def write(self, output: pathlib.Path) -> None:
-        output.parent.mkdir(parents=True, exist_ok=True)
+    def bytes(self) -> bytes:
         raw = io.BytesIO()
         with tarfile.open(fileobj=raw, mode="w", format=tarfile.PAX_FORMAT) as archive:
             for name in sorted(self.entries):
@@ -129,10 +146,15 @@ class Writer:
                 info.uid = info.gid = 0
                 info.uname = info.gname = ""
                 archive.addfile(info, io.BytesIO(data))
-        with output.open("wb") as handle:
-            with gzip.GzipFile(filename="", mode="wb", fileobj=handle, mtime=0,
-                               compresslevel=9) as gz:
-                gz.write(raw.getvalue())
+        compressed = io.BytesIO()
+        with gzip.GzipFile(filename="", mode="wb", fileobj=compressed, mtime=0,
+                           compresslevel=9) as gz:
+            gz.write(raw.getvalue())
+        return compressed.getvalue()
+
+    def write(self, output: pathlib.Path) -> None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(self.bytes())
 
 
 def main() -> None:
@@ -160,11 +182,11 @@ def main() -> None:
     top = f"raofflineproxy-{version}-source"
     writer = Writer(epoch)
     writer.add_git_archive(f"{top}/Leaf-RAOfflineProxy-Pak", ROOT, head)
-    inputs = locked_inputs()
-    for item in inputs:
-        path = ROOT / "workdir" / "sources" / item["filename"]
+    inputs = []
+    for item, data in locked_inputs():
+        inputs.append(item)
         writer.add(f"{top}/Leaf-RAOfflineProxy-Pak/workdir/sources/{item['filename']}",
-                   path.read_bytes(), False)
+                   data, False)
     writer.add_git_archive(f"{top}/Catastrophe", args.catastrophe, lock["catastrophe_commit"])
 
     manifest = {
