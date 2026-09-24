@@ -9,7 +9,7 @@ FLOOR_PAK_VERSION ?= $(shell $(PYTHON) -c 'import json; print(json.load(open("re
 MIN_LEAF_VERSION ?= $(shell $(PYTHON) -c 'import json; print(json.load(open("release-lock.json"))["min_leaf_version"])')
 MIN_JAWAKA_VERSION ?= $(shell $(PYTHON) -c 'import json; print(json.load(open("release-lock.json"))["min_jawaka_version"])')
 
-.PHONY: fetch-sources runtime-mlp1 app-mlp1 ui-mlp1 package-platform package-mlp1 package-floor-mlp1 rchash-mlp1 catalog-fixture catalog-selection-smoke test-package test-version-gate test-version-metadata test-network-fixtures test-account-guard test-precache-fixtures test-chd-reader clean
+.PHONY: fetch-sources runtime-mlp1 app-mlp1 ui-mlp1 package-platform package-mlp1 package-floor-mlp1 rchash-mlp1 catalog-fixture catalog-selection-smoke test-package test-version-gate test-version-metadata test-network-fixtures test-account-guard test-precache-fixtures test-chd-reader baseline-app test-state-compat clean
 
 fetch-sources:
 	./scripts/fetch-sources.sh
@@ -75,6 +75,12 @@ test-precache-fixtures: app-mlp1
 
 test-chd-reader: fetch-sources
 	$(PYTHON) scripts/chd-reader-test.py
+
+baseline-app:
+	./scripts/build-baseline-app.sh
+
+test-state-compat: app-mlp1 baseline-app
+	$(PYTHON) scripts/state-compat-test.py
 
 test-version-gate:
 	bash scripts/leaf-version-gate-test.sh
