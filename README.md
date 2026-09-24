@@ -69,6 +69,60 @@ change, never from this README.
 `workdir/` and `build/` are ignored build products; everything re-derives
 from the locks.
 
+## Locked sibling bootstrap
+
+The build reads sibling checkouts next to this one, and each is pinned by
+commit in `release-lock.json`. Nothing tracks a branch: a sibling at any other
+commit is a different input, and the build refuses it.
+
+| Sibling | Lock key | Used for |
+| --- | --- | --- |
+| `Catastrophe` | `catastrophe_commit` (tree `catastrophe_tree`) | the pak's UI and floor screens; a build input |
+| `Jawaka` | `jawaka_commit` | the real Pak Rat client `make catalog-selection-smoke` drives; test only |
+| `Leaf` | `leaf_commit` | the local-feed generator for the same smoke; test only |
+
+A fresh bootstrap, from an empty directory:
+
+```sh
+git clone https://github.com/Utility-Muffin-Research-Kitchen/Leaf-RAOfflineProxy-Pak.git
+lock() { python3 -c 'import json,sys; print(json.load(open("Leaf-RAOfflineProxy-Pak/release-lock.json"))[sys.argv[1]])' "$1"; }
+for repo in Catastrophe Jawaka Leaf; do
+  key="$(echo "$repo" | tr '[:upper:]' '[:lower:]')_commit"
+  git clone "https://github.com/Utility-Muffin-Research-Kitchen/$repo.git"
+  git -C "$repo" checkout --detach "$(lock "$key")"
+done
+cd Leaf-RAOfflineProxy-Pak
+make test-package          # needs Docker and the pinned mlp1-toolchain image
+```
+
+`make ui-mlp1` (and so every package build) runs
+`scripts/verify-catastrophe.sh`: a Catastrophe checkout must be at
+`catastrophe_commit` with no local changes, and a plain directory must hash to
+`catastrophe_tree`. Point `CATASTROPHE_DIR` at a worktree of the pinned commit
+if your usual Catastrophe checkout is elsewhere. CI checks out the same three
+commits.
+
+## Corresponding source
+
+`make dist-source` writes `build/dist/raofflineproxy-<version>-source.tar.gz`:
+this repository at `HEAD`, every archive the locks name (upstream
+RAOfflineProxy, CPython, xz, the CA bundle, rcheevos, libchdr) and the locked
+Catastrophe tree, with a `corresponding-source.json` listing each input's hash.
+It refuses a working tree with uncommitted changes. The package rebuilds from
+the extracted archive alone:
+
+```sh
+tar -xzf raofflineproxy-<version>-source.tar.gz
+cd raofflineproxy-<version>-source/Leaf-RAOfflineProxy-Pak
+make package-mlp1 package-floor-mlp1
+```
+
+The toolchain is the `mlp1-toolchain` image named by digest in
+`release-lock.json`. `make test-dist-source` extracts the archive with
+downloads disabled and checks the inputs, the Catastrophe tree and the
+assembled app against this checkout; with `DIST_SOURCE_REBUILD=1`, as CI runs
+it, it rebuilds both packages from the archive and requires identical ZIPs.
+
 ## Commands
 
 ```sh
@@ -76,8 +130,14 @@ scripts/fetch-sources.sh                    # verify/download all pinned sources
 scripts/build-runtime-cpython.sh            # build runtime -> build/mlp1/runtime
 scripts/assemble-app.sh                     # patched app -> build/mlp1/app
 make package-platform PLATFORM=mlp1         # real pak assembly
-make package-floor-mlp1                      # inert floor assembly
-make test-package test-version-gate          # structural and gate checks
+make package-floor-mlp1                     # inert floor assembly
+make test-package test-version-gate         # structural and gate checks
+make test-version-metadata                  # one version pair across the source
+make test-network-fixtures test-account-guard test-precache-fixtures
+make test-chd-reader                        # CHD track layout on synthetic discs
+make test-state-compat                      # 0.1.0 state: upgrade and rollback
+make catalog-selection-smoke                # real Pak Rat client, version ladder
+make dist-source test-dist-source           # corresponding source and rebuild
 ```
 
 ## Runtime contract (implemented in the patch set)

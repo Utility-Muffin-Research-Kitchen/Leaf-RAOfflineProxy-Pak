@@ -7,6 +7,7 @@
   "min_leaf_version": "0.10.0",
   "min_jawaka_version": "0.10.0",
   "catastrophe_commit": "b142403d2c666dab4851d5f8d44002474f016b56",
+  "catastrophe_tree": "36430e7235c28648c69d80cfacdf2aa832b86988",
   "jawaka_commit": "7e714c069979384bdc8b1dda5a54acfc0d2a6561",
   "leaf_commit": "dbf228170f5e983ddbfc0d1ca6ec997178048a46",
   "sibling_pin_note": "CI checks out these commits as siblings. Catastrophe builds the pak UI; Jawaka supplies the real Pak Rat client the catalog smoke drives; Leaf supplies the local-feed generator. Jawaka is pinned at the merge of the RAOfflineProxy launch bridge (#64) and Leaf at the package policy (#42), so CI exercises the platform this pak actually requires.",
