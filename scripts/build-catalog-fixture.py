@@ -100,8 +100,9 @@ def generate(leaf_dir: Path, output: Path, app_dir: Path, base_url: str,
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--floor-version", type=version, default="0.0.1")
-    parser.add_argument("--real-version", type=version, default="0.1.0")
+    lock = json.loads((ROOT / "release-lock.json").read_text(encoding="utf-8"))
+    parser.add_argument("--floor-version", type=version, default=lock["floor_version"])
+    parser.add_argument("--real-version", type=version, default=lock["pak_version"])
     parser.add_argument("--min-leaf-version", type=version, default="99.99.99")
     parser.add_argument("--base-url", default="http://127.0.0.1:8765/pakrat/v1/")
     parser.add_argument(

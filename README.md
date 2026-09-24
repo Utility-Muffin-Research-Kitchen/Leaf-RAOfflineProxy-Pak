@@ -4,16 +4,18 @@ Leaf managed-service pak packaging [misantronic/RAOfflineProxy](https://github.c
 for the Miniloong Pocket 1 (MLP1), per
 `umrk-workspace/plans/RAOfflineProxy/README.md`.
 
-**Status:** R2 package assembly complete; package/service gate validated over
-SSH on the MLP1 test device. The real service remains below the declared
-`0.11.0` Leaf/Jawaka floor on that device, so no compatible supervised install
-has been claimed. This checkout is local-only; the remote repo, catalog entry,
-tags, and releases are not authorized by the plan.
+**Status:** 0.1.0 (real) and 0.0.1 (inert floor) are published in the Pak Rat
+catalog, both immutable. The source now carries the 0.1.1 candidate: the
+refreshed upstream pin, with the same minimum Leaf/Jawaka `0.10.0` the 0.1.0
+row publishes. A version is published only by a deliberate tag and catalog
+change, never from this README.
 
 ## Layout
 
 - `release-lock.json` — pak-level pin: versions, minimum Leaf/Jawaka floor
-  (provisional `0.11.0`, confirmed at R4), toolchain image digest.
+  (`0.10.0`), toolchain image digest, sibling commits. `pak.json` and
+  `floor/requirements/` carry the same pair; `make test-version-metadata`
+  fails when any copy disagrees.
 - `locks/upstream.lock.json` — upstream tag/commit/archive hash plus the
   production import-graph exclusions.
 - `locks/runtime.lock.json` — CPython / liblzma / CA bundle pins and the
