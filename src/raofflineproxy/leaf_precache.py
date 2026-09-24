@@ -317,8 +317,11 @@ class PrecacheJob:
         ra_game_id = int(payload.get("GameId") or 0)
         if ra_game_id <= 0:
             # A real answer meaning "RetroAchievements does not know this ROM".
+            # Remembered like a not_found, so the next run neither asks again
+            # nor mistakes the stored achievementsets row for a prepared game.
             base.status = "unsupported"
             base.detail = "no RetroAchievements game for this ROM"
+            self._mark_unknown(result.hash)
             return base
         base.ra_game_id = ra_game_id
 
@@ -349,7 +352,16 @@ class PrecacheJob:
         interrupted run resumes correctly even if the file is lost or stale.
         """
         storage = self._server.storage
-        return storage.get_cache(cache_keys.achievementsets(rom_hash, user)) is not None
+        sets = storage.get_cache(cache_keys.achievementsets(rom_hash, user))
+        if sets is None:
+            return False
+        # A stored answer with GameId 0 is RetroAchievements saying it has no
+        # game for this ROM; that row is not preparation.
+        try:
+            sets_game_id = int(json.loads(sets["responseBody"]).get("GameId") or 0)
+        except (AttributeError, TypeError, ValueError):
+            sets_game_id = 0
+        return sets_game_id > 0
 
     def _classify_failure(
         self, rom_hash: str, credentials: dict, user_agent: str

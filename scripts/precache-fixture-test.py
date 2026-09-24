@@ -7,6 +7,10 @@
 - A missing ROM, or a .gdi/.cue whose track file is gone, reports "missing",
   never "Not supported" and never success.
 - A present disc that cannot be hashed stays "unsupported".
+- A game RetroAchievements has no data for (404 not_found, or Success with
+  GameId 0) is "unsupported", stores nothing a launch would read, and on the
+  next run is reported again without a request -- never "already cached".
+  No network, a transient failure and a rejected token stay failures.
 
 Run: python3 scripts/precache-fixture-test.py (after scripts/assemble-app.sh)
 """
@@ -175,6 +179,188 @@ snap = job.snapshot()
 check(snap["missing"] == 3 and snap["unsupported"] == 1 and snap["failed"] == 0,
       f"status counts missing separately (missing={snap['missing']}, "
       f"unsupported={snap['unsupported']}, failed={snap['failed']})")
+
+# 4. Games RetroAchievements has no data for, through _prepare_one with the
+# real achievementsets fetch and failure classification: only urlopen is
+# replaced, so http_get's own status handling decides what the job sees.
+import email.message  # noqa: E402
+import io  # noqa: E402
+import json  # noqa: E402
+import logging  # noqa: E402
+import urllib.error  # noqa: E402
+import urllib.parse  # noqa: E402
+from unittest import mock  # noqa: E402
+
+from raofflineproxy import cache_keys, network  # noqa: E402
+from raofflineproxy.storage import Storage  # noqa: E402
+
+# http_get logs every failed request; these are all deliberate.
+logging.getLogger("raofflineproxy").setLevel(logging.CRITICAL)
+
+
+class FakeResponse:
+    def __init__(self, payload: dict) -> None:
+        self._body = json.dumps(payload).encode()
+        self.status = 200
+        self.headers = email.message.Message()
+        self.headers["Content-Type"] = "application/json"
+
+    def read(self, *_):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+
+def upstream(*answers):
+    """urlopen that plays `answers` in order and records each action asked."""
+    queue = list(answers)
+    asked = []
+
+    def urlopen(request, timeout=None, context=None):
+        asked.append(dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(request.full_url).query))["r"])
+        answer = queue.pop(0) if queue else ("network",)
+        kind = answer[0]
+        if kind == "json":
+            return FakeResponse(answer[1])
+        if kind == "http":
+            code, payload = answer[1], answer[2]
+            raise urllib.error.HTTPError(request.full_url, code, "error", {},
+                                         io.BytesIO(json.dumps(payload).encode()))
+        raise urllib.error.URLError("synthetic: network unreachable")
+
+    return urlopen, asked
+
+
+not_found = ("http", 404, {"Success": False, "Error": "Unknown game.", "Code": "not_found",
+                           "Status": 404})
+game_id_zero = ("json", {"Success": True, "GameId": 0, "Title": "", "Sets": []})
+bad_token = ("http", 401, {"Success": False, "Error": "Invalid token.",
+                           "Code": "invalid_credentials", "Status": 401})
+known = ("json", {"Success": True, "GameId": 77, "Sets": [{}]})
+later_calls = []
+
+net_stubs = [
+    mock.patch.object(network, "configured_ssl_context", lambda: None),
+    mock.patch.object(network._request_throttle, "wait", lambda *a, **k: None),
+    mock.patch.object(leaf_precache.time, "sleep", lambda s: None),
+    mock.patch.object(leaf_precache, "cache_unlocks",
+                      lambda *a, **k: later_calls.append(("unlocks",))),
+    mock.patch.object(leaf_precache, "cache_session",
+                      lambda *a, **k: later_calls.append(("session",))),
+]
+for stub in net_stubs:
+    stub.start()
+
+
+def unknown_rom_job(system_hash: str):
+    store = WORK / f"nodata-{system_hash[:6]}-{len(list(WORK.iterdir()))}"
+    store.mkdir()
+    srv = types.SimpleNamespace(storage=Storage(store / "proxy.sqlite3"), config_data={})
+    new_job = leaf_precache.PrecacheJob(srv)
+
+    class OneHash:
+        available = True
+        error = None
+
+        @staticmethod
+        def console_id(system):
+            return 40 if system == "DC" else 4
+
+        def hash_rom(self, path, system):
+            return HashResult(system_hash)
+
+    new_job._hasher = OneHash()
+    return new_job, srv
+
+
+def prepare(job_, game, *answers):
+    urlopen, asked = upstream(*answers)
+    later_calls.clear()
+    with mock.patch.object(network.urllib.request, "urlopen", urlopen):
+        result = job_._prepare_one(game, creds, "ua")
+    return result, asked
+
+
+def no_rows_for(srv, rom_hash: str) -> bool:
+    """Nothing a launch reads beyond RA's own answer: no game id mapping."""
+    return srv.storage.get_cache(cache_keys.game_id(rom_hash)) is None
+
+
+with LibraryReader(db_path, primary_root=card) as lib:
+    nodata_games = (lib.game_by_id(4), lib.game_by_id(1))  # SEGACD, DC
+
+for game in nodata_games:
+    label = game.system
+    rom_hash = ("ab" if label == "DC" else "cd") + "0123456789abcdef0123456789abcd"
+
+    # Unknown hash, answered 404 not_found (achievementsets, then the one
+    # classifying request).
+    job_, srv = unknown_rom_job(rom_hash)
+    first, asked = prepare(job_, game, not_found, not_found)
+    check(first.status == "unsupported"
+          and first.detail == "RetroAchievements has no entry for this ROM"
+          and asked == ["achievementsets", "achievementsets"] and not later_calls
+          and no_rows_for(srv, rom_hash),
+          f"{label}: a 404 not_found hash is 'no RA data', classified with one extra "
+          f"request, and nothing is cached ({first.status}: {first.detail}; asked {asked})")
+    again, asked = prepare(job_, game, not_found)
+    check(again.status == "unsupported" and asked == [],
+          f"{label}: the next run reports it again without asking (asked {asked})")
+
+    # Unknown hash, answered Success with GameId 0.
+    job_, srv = unknown_rom_job(rom_hash)
+    first, asked = prepare(job_, game, game_id_zero)
+    check(first.status == "unsupported"
+          and first.detail == "no RetroAchievements game for this ROM"
+          and asked == ["achievementsets"] and not later_calls and no_rows_for(srv, rom_hash),
+          f"{label}: GameId 0 is 'no RA data' and stores no game id, unlocks or "
+          f"session ({first.status}: {first.detail}; asked {asked})")
+    again, asked = prepare(job_, game, game_id_zero)
+    check(again.status == "unsupported" and asked == [],
+          f"{label}: a GameId 0 game is not 'already cached' on the next run, and is not "
+          f"asked again ({again.status}: {again.detail}; asked {asked})")
+    snap_job = leaf_precache.PrecacheJob(types.SimpleNamespace(storage=None, config_data={}))
+    snap_job._record(first)
+    snap_job._record(again)
+    snap = snap_job.snapshot()
+    check(snap["cached"] == 0 and snap["skipped"] == 0 and snap["unsupported"] == 2,
+          f"{label}: neither run counts as prepared (cached={snap['cached']}, "
+          f"skipped={snap['skipped']}, unsupported={snap['unsupported']})")
+
+    # No network: failed and retryable, never recorded as unknown.
+    job_, srv = unknown_rom_job(rom_hash)
+    first, asked = prepare(job_, game, ("network",), ("network",))
+    check(first.status == "failed" and first.detail.startswith("request failed")
+          and not job_._known_unknown(rom_hash),
+          f"{label}: no network is a retryable failure, not 'no RA data' ({first.detail})")
+    retry, asked = prepare(job_, game, known)
+    check(retry.status == "cached" and asked == ["achievementsets"],
+          f"{label}: and the next run asks again and prepares it ({retry.status})")
+    third, asked = prepare(job_, game)
+    check(third.status == "skipped" and asked == [],
+          f"{label}: a game RetroAchievements does know stays 'already cached' "
+          f"({third.status}; asked {asked})")
+
+    # A rejected token is an auth failure, which stops the run.
+    job_, srv = unknown_rom_job(rom_hash)
+    first, asked = prepare(job_, game, bad_token, bad_token)
+    check(first.status == "failed" and first.detail.startswith("auth:")
+          and not job_._known_unknown(rom_hash),
+          f"{label}: a rejected token is an auth failure ({first.detail})")
+
+    # The first request failed but the classifying one succeeds: transient.
+    job_, srv = unknown_rom_job(rom_hash)
+    first, asked = prepare(job_, game, ("network",), known)
+    check(first.status == "failed" and "transiently" in first.detail
+          and not job_._known_unknown(rom_hash),
+          f"{label}: a blip is retryable, never 'no RA data' ({first.detail})")
+
+for stub in net_stubs:
+    stub.stop()
 
 if failures:
     print(f"\n{len(failures)} failure(s)")
