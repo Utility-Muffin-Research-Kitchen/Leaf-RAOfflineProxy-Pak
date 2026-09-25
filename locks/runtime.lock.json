@@ -83,9 +83,9 @@
       "size": 188900,
       "sha256": "f66dff1bdf8f96060b8177976f8b7d9254bc89bc4db933d769f7384d28480bc9",
       "license": "MPL-2.0",
-      "url": "https://curl.se/ca/cacert.pem",
+      "url": "https://curl.se/ca/cacert-2026-08-13.pem",
       "default_include": true,
-      "note": "Version taken from the bundle header 'Certificate data from Mozilla as of: Thu Aug 13 03:12:01 2026 GMT'. Shipped at <pak>/runtime/ca-certificates.crt and selected explicitly via SSL_CERT_FILE."
+      "note": "Version taken from the bundle header 'Certificate data from Mozilla as of: Thu Aug 13 03:12:01 2026 GMT'. Shipped at <pak>/runtime/ca-certificates.crt and selected explicitly via SSL_CERT_FILE. Fetched from curl's dated copy: the undated cacert.pem URL follows every Mozilla store update and broke the pinned hash on 2026-09-25."
     },
     {
       "bucket": "rcheevos",
