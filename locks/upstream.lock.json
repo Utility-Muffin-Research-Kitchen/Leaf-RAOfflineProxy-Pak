@@ -1,17 +1,20 @@
 {
   "schema": 1,
   "project": "misantronic/RAOfflineProxy",
-  "tag": "v1.11.1-alpha1",
-  "commit": "be6898e6dc26338bf82421ff7602fd37932be449",
+  "tag": "main @ 2026-09-20 (92 commits past v1.11.1-alpha1, 11 past the previously reviewed candidate; also 11 past the v1.13.0-alpha1 tag)",
+  "commit": "4e9bab484e4d7be30b2dbc313aae94ca2f5f742a",
   "license": "GPL-3.0-only",
-  "license_url": "https://github.com/misantronic/RAOfflineProxy/blob/v1.11.1-alpha1/LICENSE",
-  "linux_target_status": "alpha (upstream designation); audited 2026-08-06 at v1.10.0-alpha2 in umrk-workspace/plans/RAOfflineProxy, re-audited 2026-08-14 at v1.11.0-alpha1, and re-audited 2026-08-15 at this tag",
+  "license_url": "https://github.com/misantronic/RAOfflineProxy/blob/4e9bab484e4d7be30b2dbc313aae94ca2f5f742a/LICENSE",
+  "linux_target_status": "alpha (upstream designation); audited 2026-08-06 at v1.10.0-alpha2 in umrk-workspace/plans/RAOfflineProxy, re-audited 2026-08-14 at v1.11.0-alpha1 and 2026-08-15 at v1.11.1-alpha1, and re-pinned 2026-09-20 at this reviewed main snapshot. This snapshot is neither a stable release nor the v1.13.0-alpha1 tag.",
   "archive": {
-    "type": "github-tag-tarball",
-    "url": "https://github.com/misantronic/RAOfflineProxy/archive/refs/tags/v1.11.1-alpha1.tar.gz",
-    "filename": "RAOfflineProxy-1.11.1-alpha1.tar.gz",
-    "size": 3154353,
-    "sha256": "104732eda35feb048384701cdcc3c6e0b081f7fb8352fd09b6ed82e122f342fe"
+    "type": "github-commit-tarball",
+    "url": "https://github.com/misantronic/RAOfflineProxy/archive/4e9bab484e4d7be30b2dbc313aae94ca2f5f742a.tar.gz",
+    "filename": "RAOfflineProxy-4e9bab484e4d.tar.gz",
+    "size": 3357920,
+    "sha256": "cd53b7a24096f4a0588c9c7ec286e08b8b4c6e1e72abdf25c6789583401501c6",
+    "receipt_note": "size/sha256 are one measured receipt of the pinned commit tarball, not a build gate: GitHub re-encodes commit tarballs (observed 2026-09-20 CI fetch at 3357838 bytes, same extracted content). The authoritative input is content_sha256 over the extracted shipped subtree.",
+    "content_sha256": "ecd2094a0e3764a477cd28f73e2cea8e7a7ca7a95465dde3784208cbcca46a8e",
+    "content_scope": "linux/raofflineproxy"
   },
   "shipped_subtree": "linux/raofflineproxy",
   "excluded_from_production_import_graph": [
@@ -25,7 +28,12 @@
     "storage_corruption.py reporting path (quarantine retained, upload removed)",
     "image_cache.py on-disk cache and download scheduler",
     "knulli/ muos/ onion/ rocknix/ batocera integration scripts",
+    "config.py distro detection (running_on_*, spruce_*) and RetroArch/PPSSPP/Dolphin/batocera/ROCKNIX/DarkOS config readers (detect_*): stripped by patches/app/config.py.patch, enforced by the assembly qualifier",
+    "retroarch_cfg.py / ppsspp_cfg.py / dolphin_cfg.py / batocera_conf.py / knulli_service.py / darkos_service.py / spruce_conf.py emulator config adapters",
+    "boot.py listen-socket adoption (Leaf binds and gates on readiness instead)",
+    "pending_awards.py (menu award UI)",
     "service.py PID-file daemon launcher (replaced by the Leaf supervised adapter)",
-    "proxy_service.py ConnectivityMonitor inode watcher (os._exit self-restart)"
-  ]
+    "proxy_service.py ConnectivityMonitor inode watcher (os._exit self-restart) and PeriodicRefresh (hourly cache refresh)"
+  ],
+  "rebase_note": "Rebased 2026-09-20: the four patches/app patches were regenerated against this snapshot and apply with patch -F 0. Upstream's new forced-probe retry (3 attempts, 1-second sleeps) is retained but confined to background callers; the Leaf 500 ms per-attempt timeout and failed-probe caching bound the request path as before. Upstream's config-reader, distro-detection and menu changes are inert in Leaf mode (RAOFFLINEPROXY_CONFIG_DIR and the fixed upstream govern). utils.py token redaction and image_cache.py download shutdown are kept as updated upstream."
 }

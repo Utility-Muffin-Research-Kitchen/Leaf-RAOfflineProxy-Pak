@@ -113,7 +113,15 @@ container_main() {
     exit 1
   fi
 
-  local build="$out_dir/work/build"
+  # Configure in a directory on the container's own filesystem, never on the
+  # bind mount. CPython's configure asks whether its *build directory* is
+  # case-insensitive and, if so, names the build interpreter python.exe and
+  # records BUILDEXE, BUILDPYTHON, PYTHON_FOR_BUILD and TESTPYTHON with that
+  # name in _sysconfigdata. A macOS APFS mount folds case and a CI runner's
+  # ext4 does not, so the shipped runtime differed by host. The fixed path
+  # keeps every recorded build path identical wherever this runs.
+  local build=/tmp/raop-cpython-build
+  rm -rf "$build"
   mkdir -p "$build"
 
   local tool_cc="${CC:-aarch64-buildroot-linux-gnu-gcc}"
@@ -176,15 +184,11 @@ container_main() {
     export PYTHONPATH="$build/build/lib.linux-aarch64-$cpython_mm"
     export PYTHONDONTWRITEBYTECODE=1
 
-    # CPython names this binary python.exe only when configure detects a
-    # case-insensitive filesystem, where a plain "python" would collide with
-    # the Python/ directory. A bind mount from macOS APFS is case-insensitive
-    # and a CI runner's ext4 is not, so the same container produces a
-    # different name depending on the host the source tree came from.
-    interpreter=./python.exe
-    [ -x "$interpreter" ] || interpreter=./python
+    # The build directory is case-sensitive (see above), so configure never
+    # picks the python.exe name.
+    interpreter=./python
     [ -x "$interpreter" ] || {
-      echo "no built interpreter: neither ./python.exe nor ./python" >&2
+      echo "no built interpreter: ./python" >&2
       exit 1
     }
 
@@ -394,6 +398,12 @@ esac
 repo_container="/workspace/${ROOT#"$workspace_root"/}"
 
 jobs="$(default_jobs)"
+
+# SOURCE_DATE_EPOCH comes from the lock, never from the wall clock: without it
+# the CPython __DATE__/__TIME__ strings land inside the deterministic payload
+# and two clean builds of identical inputs compare different.
+source_date_epoch="$("$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_date_epoch"])' "$LOCK")"
+
 # Run as the invoking user, the way Leaf-Itchio-Pak does. Docker Desktop on
 # macOS maps bind-mount ownership to the host user, so a root container looks
 # fine there; on Linux the mount keeps the container's uid, and every later
@@ -402,6 +412,7 @@ jobs="$(default_jobs)"
 docker run --rm \
   --user "$(id -u):$(id -g)" \
   -e HOME=/tmp \
+  -e SOURCE_DATE_EPOCH="$source_date_epoch" \
   -e OUT_DIR_IN_CONTAINER="$out_dir_container" \
   -e SOURCES_DIR_IN_CONTAINER="$sources_dir_container" \
   -e CPYTHON_FILENAME="$cpython_filename" \
@@ -424,7 +435,15 @@ cp "$SOURCES_DIR/$cacert_filename" "$runtime/ca-certificates.crt"
 
 chmod 755 "$runtime/bin/python" "$runtime/bin/python3" "$runtime/bin/python$cpython_mm" 2>/dev/null || true
 
-image_id="$(docker image inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || true)"
+# The lock pins the image by digest, and that digest is its identity. `docker
+# image inspect .Id` is not: it is a per-host config digest (Docker Desktop
+# and a GitHub runner report different ids for this same pinned image), which
+# made the shipped runtime manifest differ between otherwise identical builds.
+# Only an unpinned development override falls back to the local id.
+case "$IMAGE" in
+  *@sha256:*) image_id="${IMAGE##*@}" ;;
+  *) image_id="$(docker image inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || true)" ;;
+esac
 image_digest="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$IMAGE" 2>/dev/null | head -n 1 || true)"
 runtime_manifest="$runtime/.leaf-runtime-manifest.json"
 "$PYTHON" - "$LOCK" "$SOURCES_DIR" "$runtime_manifest" "$IMAGE" "$image_digest" "$image_id" <<'PY'
@@ -467,7 +486,10 @@ manifest = {
     "product": lock.get("product"),
     "kind": "cpython-runtime",
     "production": True,
-    "generated_at": datetime.now(timezone.utc).isoformat(),
+    # This manifest ships inside the installed payload, so it must be
+    # deterministic: no wall-clock fields, no machine paths. Build receipts
+    # live in the outer (unshipped) JSON next to the runtime ZIP.
+    "source_date_epoch": lock.get("source_date_epoch"),
     "target": lock.get("target", {}),
     "build": {
         "toolchain_image": image,
@@ -488,7 +510,28 @@ python_tag="python$(printf '%s' "$cpython_mm" | tr -d .)"
 artifact="$OUT_DIR/raofflineproxy-mlp1-runtime-$python_tag-aarch64-cpython-$cpython_version.zip"
 manifest="$OUT_DIR/raofflineproxy-mlp1-runtime-$python_tag-aarch64-cpython-$cpython_version.json"
 rm -f "$artifact" "$manifest"
-(cd "$OUT_DIR/root" && zip -X -qr "$artifact" raofflineproxy)
+# 'zip -X' drops extra attributes, not mtimes: identical payload bytes from
+# two clean builds would still compare different. Pin every entry's mtime to
+# the lock's SOURCE_DATE_EPOCH before archiving, so the artifact is
+# byte-stable for identical inputs.
+"$PYTHON" - "$source_date_epoch" "$OUT_DIR/root/raofflineproxy" <<'PY'
+import os
+import sys
+
+epoch = int(sys.argv[1])
+root = sys.argv[2]
+for dirpath, dirnames, filenames in os.walk(root):
+    for name in dirnames + filenames:
+        # No symlinks in the flattened runtime, so no follow_symlinks=False
+        # (which some platforms silently ignore for directories).
+        os.utime(os.path.join(dirpath, name), (epoch, epoch))
+# os.walk yields only the children; the archived top-level directory is an
+# entry too, and it still carried the wall-clock time of this build.
+os.utime(root, (epoch, epoch))
+PY
+# ZIP entries store DOS local time, so the same epoch encodes differently on a
+# UTC CI runner and a developer machine in another zone. Archive in UTC.
+(cd "$OUT_DIR/root" && TZ=UTC zip -X -qr "$artifact" raofflineproxy)
 
 "$PYTHON" - "$runtime_manifest" "$artifact" "$manifest" "$runtime" <<'PY'
 import hashlib

@@ -68,6 +68,10 @@ mkdir -p "$rc_work" "$chd_work"
 tar xzf "$SOURCES_DIR/$rc_filename" -C "$rc_work" --strip-components=1
 tar xzf "$SOURCES_DIR/$chd_filename" -C "$chd_work" --strip-components=1
 
+# SOURCE_DATE_EPOCH comes from the runtime lock, never from the wall clock
+# (see build-runtime-cpython.sh).
+source_date_epoch="$("$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_date_epoch"])' "$ROOT/locks/runtime.lock.json")"
+
 # Run as the invoking user, the way Leaf-Itchio-Pak does. Docker Desktop on
 # macOS maps bind-mount ownership to the host user, so a root container looks
 # fine there; on Linux the mount keeps the container's uid, and every later
@@ -75,6 +79,7 @@ tar xzf "$SOURCES_DIR/$chd_filename" -C "$chd_work" --strip-components=1
 # "Permission denied" on a tree it supposedly owns.
 docker run --rm \
     --user "$(id -u):$(id -g)" \
+    -e SOURCE_DATE_EPOCH="$source_date_epoch" \
     -v "$WORKSPACE_ROOT:/workspace" \
     -w "/workspace/$REPO_REL" \
     "$IMAGE" \

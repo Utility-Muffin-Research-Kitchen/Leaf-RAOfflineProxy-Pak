@@ -17,10 +17,14 @@ jobs:
     runs-on: ubuntu-24.04-arm
 
     steps:
+      # Full history with tags: the version-metadata check must see which
+      # versions are already published, and the state test rebuilds the
+      # published 0.1.0 from its tag.
       - name: Checkout RAOfflineProxy pak
         uses: actions/checkout@v4
         with:
           path: Leaf-RAOfflineProxy-Pak
+          fetch-depth: 0
 
       # Siblings are pinned rather than tracked. A Catastrophe or Jawaka change
       # must not be able to break -- or silently fix -- this pak's build without
@@ -67,12 +71,6 @@ jobs:
           python3 -m py_compile scripts/*.py
           python3 -m py_compile src/raofflineproxy/*.py
 
-      # Cheap, and the one gate that protects a pak already on the card when
-      # Leaf is rolled back.
-      - name: Run the Leaf version gate test
-        working-directory: Leaf-RAOfflineProxy-Pak
-        run: make test-version-gate
-
       # Every source input carries a URL, size and SHA-256, so the cache key is
       # the lock files themselves: a re-pin invalidates it by construction and
       # can never serve a stale archive.
@@ -82,43 +80,123 @@ jobs:
           path: Leaf-RAOfflineProxy-Pak/workdir/sources
           key: raop-sources-${{ hashFiles('Leaf-RAOfflineProxy-Pak/locks/*.json') }}
 
-      # Internal CI must stay useful when a locally pinned toolchain image has
-      # not been published to GHCR. A release tag is deliberately stricter:
-      # release.yml always requires this exact immutable manifest.
+      # Cheap, and the one gate that protects a pak already on the card when
+      # Leaf is rolled back.
+      - name: Run the Leaf version gate test
+        working-directory: Leaf-RAOfflineProxy-Pak
+        run: make test-version-gate
+
+      # pak.json, release-lock.json and floor/requirements carry one version
+      # pair, and the version is not one already published.
+      - name: Check the version metadata
+        working-directory: Leaf-RAOfflineProxy-Pak
+        run: make test-version-metadata
+
+      # chdman converts the same synthetic discs the CHD reader test writes,
+      # so the layout is checked against the reference tool too. The Pak Rat
+      # client the catalog smoke builds needs SQLite and libcurl headers.
+      - name: Install host test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mame-tools libsqlite3-dev libcurl4-openssl-dev
+
+      # Probe shape after the upstream refresh: bounded request path, cached
+      # negative probes, background-only forced retries, carrier fallback.
+      - name: Run the network fixtures
+        working-directory: Leaf-RAOfflineProxy-Pak
+        run: make test-network-fixtures
+
+      # Pending awards flush with their owner's own token after an account
+      # switch; offline hardcore, other-account and leaderboard entries are
+      # refused, never queued.
+      - name: Run the account guard fixtures
+        working-directory: Leaf-RAOfflineProxy-Pak
+        run: make test-account-guard
+
+      # Primary-card games resolve against the launcher card; missing ROMs and
+      # track files report as missing, never as prepared or "No RA data".
+      - name: Run the pre-cache fixtures
+        working-directory: Leaf-RAOfflineProxy-Pak
+        run: make test-precache-fixtures
+
+      # The two CHD reader fixes (GD-ROM track padding, unstored pregaps) on
+      # synthetic discs, hashed through the real rc_hash entry point.
+      - name: Run the CHD reader test
+        working-directory: Leaf-RAOfflineProxy-Pak
+        env:
+          RAOP_REQUIRE_CHDMAN: "1"
+        run: make test-chd-reader
+
+      # Upgrade from and roll back to the published 0.1.0 over one state
+      # directory. The baseline is rebuilt from the v0.1.0 tag and must equal
+      # the app tree inside the published release asset.
+      - name: Run the 0.1.0 state upgrade and rollback test
+        working-directory: Leaf-RAOfflineProxy-Pak
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v0.1.0 --repo "$GITHUB_REPOSITORY" \
+            --pattern RAOfflineProxy.mlp1.pak.zip --dir "$RUNNER_TEMP/published-0.1.0"
+          BASELINE_PUBLISHED_ZIP="$RUNNER_TEMP/published-0.1.0/RAOfflineProxy.mlp1.pak.zip" \
+            make test-state-compat
+
+      # The package build needs the pinned toolchain image. If it cannot be
+      # pulled this job fails: a green run that skipped packaging would claim
+      # a build nobody made.
       - name: Check pinned MLP1 toolchain availability
-        id: toolchain
         env:
           MLP1_TOOLCHAIN_IMAGE: ${{ steps.release-lock.outputs.toolchain }}
         run: |
-          if docker manifest inspect "$MLP1_TOOLCHAIN_IMAGE" >/dev/null 2>&1; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Pinned MLP1 toolchain manifest is unavailable; skipping the package build in CI. Release builds remain strict."
+          if ! docker manifest inspect "$MLP1_TOOLCHAIN_IMAGE" >/dev/null; then
+            echo "::error::Pinned MLP1 toolchain $MLP1_TOOLCHAIN_IMAGE is unavailable; the package cannot be built."
+            exit 1
           fi
 
-      # Builds both packages and runs package_check. This also exercises the
+      # Builds both packages and runs package_check (this also exercises the
       # assembly qualifier, which fails the build if a pruned module, forbidden
-      # import or banned symbol reappears from upstream.
-      - name: Build and check both packages
-        if: steps.toolchain.outputs.available == 'true'
+      # import, banned symbol or config reader reappears from upstream). Then
+      # cuts the corresponding-source archive and rebuilds both packages from
+      # it alone, offline; the ZIPs must be identical.
+      - name: Build and check both packages, and rebuild them from the corresponding source
         working-directory: Leaf-RAOfflineProxy-Pak
         env:
           MLP1_TOOLCHAIN_IMAGE: ${{ steps.release-lock.outputs.toolchain }}
-        run: make test-package
+        run: make test-package test-dist-source DIST_SOURCE_REBUILD=1
 
-      # Catalog version selection is NOT run here, and that is a gap worth
-      # stating rather than hiding behind a skipped step.
-      #
-      # The smoke drives Jawaka's real Pak Rat client, which means building
-      # jawaka-pakrat-smoke natively on the runner. That build currently fails
-      # on Linux -- PATH_MAX and O_CLOEXEC undeclared, missing limits.h/fcntl.h
-      # feature-test macros -- because Jawaka's host build has only ever been
-      # done on macOS. Installing libcurl headers is not enough; verified.
-      #
-      # Adding the step with continue-on-error would be worse than leaving it
-      # out: a step that always fails and is ignored trains everyone to ignore
-      # it. The coverage exists today via `make catalog-selection-smoke` run
-      # locally, and the selection rule is qualified on device (see
-      # docs/r4-release-handoff.md). Restore this step once Jawaka's host build
-      # is portable.
+      # The independent arm64 half of the reproducibility gate: print what
+      # this runner built so it can be compared with two clean local builds.
+      # The pak ZIPs pin every entry to 1980-01-01; the runtime ZIP pins its
+      # entries to the lock's SOURCE_DATE_EPOCH in UTC.
+      - name: Print package identities
+        working-directory: Leaf-RAOfflineProxy-Pak/build/mlp1
+        run: |
+          sha256sum RAOfflineProxy.mlp1.pak.zip floor/RAOfflineProxy.mlp1.pak.zip \
+            runtime/raofflineproxy-mlp1-runtime-*.zip rchash/libraproxy_rchash.so \
+            ../dist/raofflineproxy-*-source.tar.gz
+          for tree in package app; do
+            printf '%s tree ' "$tree"
+            (cd "$tree" && find . -type f | LC_ALL=C sort | xargs sha256sum | sha256sum)
+          done
+          # Per-file listing, so a mismatch against a local build names the
+          # files that differ instead of only an aggregate.
+          echo "--- package tree files"
+          (cd package && find . -type f | LC_ALL=C sort | xargs sha256sum)
+
+      # The runtime's build-configuration record is the file most exposed to
+      # host differences; keep it (and the manifest that hashes it) so a
+      # mismatch can be diffed rather than guessed at.
+      - name: Upload runtime configuration record
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-config-record
+          path: |
+            Leaf-RAOfflineProxy-Pak/build/mlp1/package/RAOfflineProxy.pak/runtime/lib/python3.13/_sysconfigdata__linux_aarch64-linux-gnu.py
+            Leaf-RAOfflineProxy-Pak/build/mlp1/package/RAOfflineProxy.pak/runtime/.leaf-runtime-manifest.json
+          include-hidden-files: true
+
+      # Catalog version selection through Jawaka's real Pak Rat client at the
+      # pinned commit, against a disposable local feed: below / at / above the
+      # minimum, and the runtime gate's independent refusal.
+      - name: Run the catalog selection smoke
+        working-directory: Leaf-RAOfflineProxy-Pak
+        run: make catalog-selection-smoke

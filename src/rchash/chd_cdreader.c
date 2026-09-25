@@ -166,28 +166,36 @@ static int raproxy_read_tracks(chd_file *chd, raproxy_chd_track *tracks,
         track->pregap = (uint32_t)pregap;
         raproxy_track_geometry(type, track);
 
-        /* The pregap IS stored in the CHD, so a track's data begins after it.
-         * The PGTYPE "V" prefix suggests otherwise, but a PC Engine CD whose
-         * track 2 declares PREGAP:225 PGTYPE:VMODE1_RAW puts its header at
-         * frame 1322 where the table without the pregap predicts 1097 --
-         * exactly 225 out. Both the CHD offset and the LBA advance by it. */
-        track->chd_start = chd_frame + (uint32_t)pregap;
+        /* A PGTYPE with a "V" prefix means the pregap's frames are stored in
+         * the CHD ahead of the track's data: a PC Engine CD whose track 2
+         * declares PREGAP:225 PGTYPE:VMODE1_RAW puts its header at frame 1322
+         * where the table without the pregap predicts 1097 -- exactly 225
+         * out. Without the prefix the pregap is silence the CHD does not
+         * store: Castlevania - Rondo of Blood (Translated) declares
+         * PREGAP:225 PGTYPE:MODE1 and its header is at frame 3669, sector 1
+         * of a track starting right after track 1's padded 3668 frames.
+         * Either way the LBA advances by the pregap. */
+        uint32_t stored_pregap = pgtype[0] == 'V' ? (uint32_t)pregap : 0;
+        track->chd_start = chd_frame + stored_pregap;
         track->abs_start = abs_sector + (uint32_t)pregap;
         abs_sector += (uint32_t)pregap + (uint32_t)frames;
 
-        chd_frame += (uint32_t)pregap + (uint32_t)frames;
-        if (pad < 0) {
-            /* Ordinary CD: tracks are padded up to a 4-frame boundary. */
-            chd_frame = (chd_frame + RAPROXY_CHD_TRACK_PADDING - 1) /
-                        RAPROXY_CHD_TRACK_PADDING * RAPROXY_CHD_TRACK_PADDING;
-        }
+        /* Every track, GD-ROM included, is stored padded up to a 4-frame
+         * boundary; the LBA does not advance by that padding. */
+        chd_frame += stored_pregap + (uint32_t)frames;
+        chd_frame = (chd_frame + RAPROXY_CHD_TRACK_PADDING - 1) /
+                    RAPROXY_CHD_TRACK_PADDING * RAPROXY_CHD_TRACK_PADDING;
         /* GD-ROM (pad >= 0) advances neither counter by PAD. Crazy Taxi
          * declares PAD:150 and PAD:43874, yet its high-density IP.BIN sits at
          * frame 45000 -- exactly 600 + 44400, the frame counts alone. Applying
          * PAD to the CHD offset put track 3 at 89024, and applying it to the
          * LBA would break the filesystem lookup too: ISO9660 directory records
-         * in the high-density area address LBA 45000 upward, so the CHD frame
-         * and the LBA have to coincide here. */
+         * in the high-density area address LBA 45000 upward.
+         *
+         * Those two counts are multiples of 4, so padding never showed there.
+         * Sonic Adventure 2 (Europe) has tracks of 5574 and 39426 frames: its
+         * IP.BIN is at CHD frame 45004 (5576 + 39428) while its LBA is still
+         * 45000. Without the padding its hash failed as "not a Dreamcast". */
         count++;
     }
 

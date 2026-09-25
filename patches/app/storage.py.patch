@@ -228,3 +228,37 @@
      def _quarantine_corrupt_json_unlocked(self, reason: str) -> None:
          quarantine_path = self._json_path.with_name(
              f"{self._json_path.name}.corrupt-{current_millis()}"
+@@ -708,7 +784,32 @@
+                 self._write_json_state_unlocked()
+ 
+     def load_login_credentials(self) -> dict | None:
+-        entry = self.get_cache_by_prefix(cache_keys.PREFIX_LOGIN)
++        # Leaf: the cache keeps one login row per user, and an update keeps
++        # the row's id, so upstream's unordered prefix lookup returned the
++        # first account that ever signed in here, not the current one. Use
++        # the most recent sign-in.
++        assert self._connection is not None
++        with self._lock:
++            row = self._connection.execute(
++                "SELECT * FROM api_cache WHERE cacheKey LIKE ? "
++                "ORDER BY cachedAt DESC, id DESC LIMIT 1",
++                (f"{cache_keys.PREFIX_LOGIN}%",),
++            ).fetchone()
++        return self._login_credentials_from_entry(row_to_dict(row))
++
++    def load_login_credentials_for(self, user: str) -> dict | None:
++        """Leaf: this user's own learned login, never another account's."""
++        credentials = self._login_credentials_from_entry(
++            self.get_cache(cache_keys.login(user))
++        )
++        if credentials is None or cache_keys.normalize_user(
++            credentials["user"]
++        ) != cache_keys.normalize_user(user):
++            return None
++        return credentials
++
++    @staticmethod
++    def _login_credentials_from_entry(entry: dict | None) -> dict | None:
+         if entry is None:
+             return None
+ 

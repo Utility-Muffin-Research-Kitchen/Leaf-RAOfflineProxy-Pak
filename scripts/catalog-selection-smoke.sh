@@ -19,8 +19,14 @@ WORKSPACE="$(cd "$ROOT_DIR/.." && pwd)"
 JAWAKA_DIR="$WORKSPACE/Jawaka"
 LEAF_DIR="$WORKSPACE/Leaf"
 APP_ID="org.umrk.raofflineproxy"
-FLOOR_VERSION="0.0.1"
-REAL_VERSION="0.1.0"
+# The versions under test are the lock's, so a version bump moves the smoke
+# with it instead of leaving it qualifying a release that already shipped.
+lock_value() {
+    python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' \
+        "$ROOT_DIR/release-lock.json" "$1"
+}
+FLOOR_VERSION="$(lock_value floor_version)"
+REAL_VERSION="$(lock_value pak_version)"
 DISPOSABLE_MIN="99.99.99"
 
 PORT="$(python3 - <<'PY'
@@ -42,7 +48,8 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 python3 "$ROOT_DIR/scripts/build-catalog-fixture.py" \
-    --base-url "$BASE_URL" --min-leaf-version "$DISPOSABLE_MIN" >/dev/null
+    --base-url "$BASE_URL" --min-leaf-version "$DISPOSABLE_MIN" \
+    --floor-version "$FLOOR_VERSION" --real-version "$REAL_VERSION" >/dev/null
 
 python3 -m http.server "$PORT" --bind 127.0.0.1 --directory "$FEED_ROOT" \
     >"$TMP_ROOT/http.log" 2>&1 &
@@ -55,7 +62,11 @@ done
 curl -fsS "$BASE_URL/storefront.json" >/dev/null
 
 BUILD_DIR="build/raop-catalog-smoke"
-make -C "$JAWAKA_DIR" BUILD="$BUILD_DIR" jawaka-pakrat-smoke >/dev/null
+# gnu11 rather than Jawaka's default c11: the pinned Jawaka's host build uses
+# PATH_MAX and O_CLOEXEC without the feature-test macros strict c11 needs on
+# glibc (macOS exposes them regardless). The language mode is the only change;
+# the sources are the pinned ones.
+make -C "$JAWAKA_DIR" BUILD="$BUILD_DIR" CSTD=-std=gnu11 jawaka-pakrat-smoke >/dev/null
 SMOKE="$JAWAKA_DIR/$BUILD_DIR/bin/jawaka-pakrat-smoke"
 
 SD_ROOT="$TMP_ROOT/sd"

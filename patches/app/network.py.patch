@@ -8,9 +8,9 @@
 +# capped at 500 ms (R0 bound; a dead/captive network must not stall play).
 +REACHABILITY_PROBE_TIMEOUT_SECONDS = 0.5
  REACHABILITY_INTERVAL_SECONDS = 30.0
- HTTP_TOO_MANY_REQUESTS = 429
- HTTP_GET_MAX_429_RETRIES = 4
-@@ -178,8 +181,8 @@
+ PROBE_ATTEMPTS = 3
+ PROBE_RETRY_DELAY_SECONDS = 1.0
+@@ -180,8 +183,8 @@
      reachable, checked_at = _reachability_tracker.current()
      if checked_at == 0.0:
          return True
@@ -21,7 +21,7 @@
      return (current_time - checked_at) >= REACHABILITY_INTERVAL_SECONDS
  
  
-@@ -226,7 +229,9 @@
+@@ -262,7 +265,9 @@
      )
      try:
          with urllib.request.urlopen(
@@ -30,5 +30,5 @@
 +            timeout=REACHABILITY_PROBE_TIMEOUT_SECONDS,
 +            context=configured_ssl_context(),
          ) as response:
-             reachable = 200 <= response.status < 500
-             if reachable:
+             if 200 <= response.status < 500:
+                 return True, ""

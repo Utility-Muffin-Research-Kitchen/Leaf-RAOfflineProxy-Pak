@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "purpose": "The published release whose durable state the candidate must upgrade from and roll back to. scripts/build-baseline-app.sh re-derives that release's app tree from its tag with the tag's own assembly script and upstream lock; scripts/state-compat-test.py runs both versions over one state directory.",
+  "pak_version": "0.1.0",
+  "tag": "v0.1.0",
+  "commit": "40ec7508899a5ff9f5988985dc36a0b3638de80f",
+  "published_zip_sha256": "5ee5b7957c3a45f7194e850763daa006e40266cdc4257549efe5c331bec62b6e",
+  "upstream": {
+    "url": "https://github.com/misantronic/RAOfflineProxy/archive/refs/tags/v1.11.1-alpha1.tar.gz",
+    "filename": "RAOfflineProxy-1.11.1-alpha1.tar.gz",
+    "size": 3154353,
+    "sha256": "104732eda35feb048384701cdcc3c6e0b081f7fb8352fd09b6ed82e122f342fe",
+    "receipt_note": "size/sha256 are the v0.1.0 lock's receipt of the tag tarball and matched a fresh fetch on 2026-09-24. GitHub may re-encode tag tarballs; content_sha256 over the extracted shipped subtree is what the builder gates on.",
+    "content_sha256": "0d4ce5e32610142f4af760e5fe5ed53222931594ea67f2288ff1e520fa55efd7",
+    "content_scope": "linux/raofflineproxy"
+  }
+}

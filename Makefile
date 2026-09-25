@@ -9,7 +9,7 @@ FLOOR_PAK_VERSION ?= $(shell $(PYTHON) -c 'import json; print(json.load(open("re
 MIN_LEAF_VERSION ?= $(shell $(PYTHON) -c 'import json; print(json.load(open("release-lock.json"))["min_leaf_version"])')
 MIN_JAWAKA_VERSION ?= $(shell $(PYTHON) -c 'import json; print(json.load(open("release-lock.json"))["min_jawaka_version"])')
 
-.PHONY: fetch-sources runtime-mlp1 app-mlp1 ui-mlp1 package-platform package-mlp1 package-floor-mlp1 rchash-mlp1 catalog-fixture catalog-selection-smoke test-package test-version-gate clean
+.PHONY: fetch-sources runtime-mlp1 app-mlp1 ui-mlp1 package-platform package-mlp1 package-floor-mlp1 rchash-mlp1 catalog-fixture catalog-selection-smoke test-package test-version-gate test-version-metadata test-network-fixtures test-account-guard test-precache-fixtures test-chd-reader baseline-app test-state-compat dist-source test-dist-source clean
 
 fetch-sources:
 	./scripts/fetch-sources.sh
@@ -24,12 +24,14 @@ rchash-mlp1: fetch-sources
 	./scripts/build-rchash.sh
 
 ui-mlp1:
+	./scripts/verify-catastrophe.sh "$(CATASTROPHE_DIR)"
 	docker run --rm \
 		--user "$$(id -u):$$(id -g)" \
+		-e SOURCE_DATE_EPOCH="$$( $(PYTHON) -c 'import json; print(json.load(open("locks/runtime.lock.json"))["source_date_epoch"])' )" \
 		-v "$(WORKSPACE_ROOT):/workspace" \
 		-w "$(MLP1_CONTAINER_REPO)" \
 		"$(MLP1_TOOLCHAIN_IMAGE)" \
-		make -f ports/mlp1/Makefile BUILD_DIR=build/mlp1 CATASTROPHE_DIR=/workspace/Catastrophe
+		make -f ports/mlp1/Makefile BUILD_DIR=build/mlp1 CATASTROPHE_DIR=/workspace/$(notdir $(CATASTROPHE_DIR))
 
 package-platform:
 	@case "$(PLATFORM)" in \
@@ -55,8 +57,41 @@ catalog-fixture:
 catalog-selection-smoke:
 	bash scripts/catalog-selection-smoke.sh
 
+test-network-fixtures: app-mlp1
+	$(PYTHON) scripts/network-fixture-test.py
+
+test-account-guard: app-mlp1
+	$(PYTHON) scripts/account-guard-test.py
+
+test-precache-fixtures: app-mlp1
+	$(PYTHON) scripts/precache-fixture-test.py
+
+test-chd-reader: fetch-sources
+	$(PYTHON) scripts/chd-reader-test.py
+
+# Corresponding source for the package this commit builds: the repo at HEAD,
+# every locked input, and the locked Catastrophe tree, in one archive that
+# rebuilds with no network. See README "Corresponding source".
+dist-source: fetch-sources
+	$(PYTHON) scripts/dist-source.py --catastrophe "$(CATASTROPHE_DIR)"
+
+# With DIST_SOURCE_REBUILD=1 the comparison needs this checkout's packages,
+# so they become prerequisites (built once per make invocation).
+test-dist-source: app-mlp1 dist-source $(if $(filter 1,$(DIST_SOURCE_REBUILD)),package-mlp1 package-floor-mlp1)
+	$(PYTHON) scripts/dist-source-determinism-test.py
+	bash scripts/dist-source-test.sh
+
+baseline-app:
+	./scripts/build-baseline-app.sh
+
+test-state-compat: app-mlp1 baseline-app
+	$(PYTHON) scripts/state-compat-test.py
+
 test-version-gate:
 	bash scripts/leaf-version-gate-test.sh
+
+test-version-metadata:
+	$(PYTHON) scripts/version-metadata-test.py
 
 test-package: package-mlp1 package-floor-mlp1
 	$(PYTHON) scripts/package_check.py

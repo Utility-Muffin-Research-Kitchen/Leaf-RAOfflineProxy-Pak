@@ -100,8 +100,9 @@ def generate(leaf_dir: Path, output: Path, app_dir: Path, base_url: str,
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--floor-version", type=version, default="0.0.1")
-    parser.add_argument("--real-version", type=version, default="0.1.0")
+    lock = json.loads((ROOT / "release-lock.json").read_text(encoding="utf-8"))
+    parser.add_argument("--floor-version", type=version, default=lock["floor_version"])
+    parser.add_argument("--real-version", type=version, default=lock["pak_version"])
     parser.add_argument("--min-leaf-version", type=version, default="99.99.99")
     parser.add_argument("--base-url", default="http://127.0.0.1:8765/pakrat/v1/")
     parser.add_argument(
@@ -192,12 +193,16 @@ def main() -> None:
                      / "storefront.json")
     if baseline_path.is_file():
         baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
-        if any(entry.get("id") == APP_ID for entry in baseline["apps"]):
-            raise SystemExit(
-                "production catalog already publishes this app id; this plan "
-                "does not authorize a catalog entry"
-            )
-        print(f"production baseline clean ({len(baseline['apps'])} apps, no {APP_ID})")
+        published = [entry for entry in baseline["apps"] if entry.get("id") == APP_ID]
+        # The first release of this app id is long done, so the old
+        # "not yet published" guard would now refuse every refresh smoke.
+        # What still matters: this script only ever writes a DISPOSABLE local
+        # fixture; publishing decisions happen in leaf-docs, never here.
+        if published:
+            print(f"production baseline publishes {APP_ID} "
+                  f"(fixture remains disposable; no catalog write here)")
+        else:
+            print(f"production baseline clean ({len(baseline['apps'])} apps, no {APP_ID})")
 
     print(f"\nstorefront: {storefront_path}")
     print(f"  legacy/base version : {app['version']} (ungated floor)")

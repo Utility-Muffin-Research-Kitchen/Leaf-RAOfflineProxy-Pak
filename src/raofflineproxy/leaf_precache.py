@@ -34,9 +34,11 @@ from __future__ import annotations
 import json
 import logging
 import random
+import re
 import threading
 import time
 from dataclasses import dataclass, field, asdict
+from pathlib import Path
 
 from . import cache_keys
 from .config import FALLBACK_USER_AGENT
@@ -63,13 +65,44 @@ INTER_CALL_SECONDS = 0.2
 #: learning nothing.
 UNKNOWN_ROM_TTL_SECONDS = 30 * 24 * 3600
 
+#: A disc sheet line naming a track file: GDI ``N LBA TYPE SIZE FILE OFFSET``
+#: (FILE quoted when it has spaces) and CUE ``FILE "name" TYPE``.
+_GDI_TRACK = re.compile(r'^\s*\d+\s+\d+\s+\d+\s+\d+\s+(?:"([^"]+)"|(\S+))\s+-?\d+\s*$')
+_CUE_FILE = re.compile(r'^\s*FILE\s+(?:"([^"]+)"|(\S+))\s+\S+\s*$', re.IGNORECASE)
+
+
+def missing_disc_files(rom_path: str) -> list[str]:
+    """Track files a .gdi or .cue sheet names that are not on the card."""
+    sheet = Path(rom_path)
+    suffix = sheet.suffix.lower()
+    if suffix == ".gdi":
+        pattern = _GDI_TRACK
+    elif suffix == ".cue":
+        pattern = _CUE_FILE
+    else:
+        return []
+    try:
+        lines = sheet.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    absent = []
+    for line in lines:
+        match = pattern.match(line)
+        if not match:
+            continue
+        name = match.group(1) or match.group(2)
+        if not (sheet.parent / name).is_file():
+            absent.append(name)
+    return absent
+
 
 @dataclass
 class GameOutcome:
     game_id: int
     name: str
     system: str
-    #: "cached" | "skipped" (already cached) | "unsupported" | "failed"
+    #: "cached" | "skipped" (already cached) | "missing" (ROM or track file
+    #: absent) | "unsupported" | "failed"
     status: str
     detail: str = ""
     rom_hash: str = ""
@@ -83,6 +116,7 @@ class PrecacheProgress:
     processed: int = 0
     cached: int = 0
     skipped: int = 0
+    missing: int = 0
     unsupported: int = 0
     failed: int = 0
     current: str = ""
@@ -205,13 +239,25 @@ class PrecacheJob:
             return base
 
         if not game.exists:
-            base.status = "unsupported"
+            base.status = "missing"
             base.detail = "ROM file is missing"
+            return base
+
+        absent = missing_disc_files(game.rom_path)
+        if absent:
+            # rcheevos reads only the data track it hashes, so a disc with an
+            # audio track gone still hashes -- and then does not boot. That is
+            # not a prepared game.
+            base.status = "missing"
+            base.detail = f"missing track file: {absent[0]}"
             return base
 
         if hasher.console_id(game.system) is None:
             base.status = "unsupported"
-            base.detail = f"{game.system} has no RetroAchievements console"
+            # Absent from the console table because Leaf does not run that
+            # system through RetroAchievements (Saturn and N64 are standalone
+            # emulators), not because RetroAchievements lacks it.
+            base.detail = f"{game.system} games are not prepared by this pak"
             return base
 
         result = hasher.hash_rom(game.rom_path, game.system)
@@ -271,8 +317,11 @@ class PrecacheJob:
         ra_game_id = int(payload.get("GameId") or 0)
         if ra_game_id <= 0:
             # A real answer meaning "RetroAchievements does not know this ROM".
+            # Remembered like a not_found, so the next run neither asks again
+            # nor mistakes the stored achievementsets row for a prepared game.
             base.status = "unsupported"
             base.detail = "no RetroAchievements game for this ROM"
+            self._mark_unknown(result.hash)
             return base
         base.ra_game_id = ra_game_id
 
@@ -303,7 +352,16 @@ class PrecacheJob:
         interrupted run resumes correctly even if the file is lost or stale.
         """
         storage = self._server.storage
-        return storage.get_cache(cache_keys.achievementsets(rom_hash, user)) is not None
+        sets = storage.get_cache(cache_keys.achievementsets(rom_hash, user))
+        if sets is None:
+            return False
+        # A stored answer with GameId 0 is RetroAchievements saying it has no
+        # game for this ROM; that row is not preparation.
+        try:
+            sets_game_id = int(json.loads(sets["responseBody"]).get("GameId") or 0)
+        except (AttributeError, TypeError, ValueError):
+            sets_game_id = 0
+        return sets_game_id > 0
 
     def _classify_failure(
         self, rom_hash: str, credentials: dict, user_agent: str
@@ -398,6 +456,8 @@ class PrecacheJob:
                 p.cached += 1
             elif outcome.status == "skipped":
                 p.skipped += 1
+            elif outcome.status == "missing":
+                p.missing += 1
             elif outcome.status == "unsupported":
                 p.unsupported += 1
             else:
