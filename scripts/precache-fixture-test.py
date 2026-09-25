@@ -7,6 +7,9 @@
 - A missing ROM, or a .gdi/.cue whose track file is gone, reports "missing",
   never "Not supported" and never success.
 - A present disc that cannot be hashed stays "unsupported".
+- Preparing a Dreamcast game also stores the ``patch`` row standalone Flycast
+  loads offline; other systems do not fetch it, and a Dreamcast game prepared
+  without it is prepared again rather than skipped.
 - A game RetroAchievements has no data for (404 not_found, or Success with
   GameId 0) is "unsupported", stores nothing a launch would read, and on the
   next run is reported again without a request -- never "already cached".
@@ -16,12 +19,14 @@ Run: python3 scripts/precache-fixture-test.py (after scripts/assemble-app.sh)
 """
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import sqlite3
 import sys
 import tempfile
 import types
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 APP = ROOT / "build" / "mlp1" / "app" / "raofflineproxy"
@@ -34,7 +39,9 @@ os.environ["RAOFFLINEPROXY_CONFIG_DIR"] = str(WORK / "config")
 os.environ.pop("SDCARD_PATH", None)
 sys.path.insert(0, str(APP.parent))
 
-from raofflineproxy import leaf_precache  # noqa: E402
+from raofflineproxy import cache_keys, leaf_precache  # noqa: E402
+from raofflineproxy.rom_cache import CacheGameError  # noqa: E402
+from raofflineproxy.storage import Storage  # noqa: E402
 from raofflineproxy.leaf_library import LibraryGame, LibraryReader  # noqa: E402
 from raofflineproxy.leaf_romhash import HashResult  # noqa: E402
 
@@ -180,7 +187,79 @@ check(snap["missing"] == 3 and snap["unsupported"] == 1 and snap["failed"] == 0,
       f"status counts missing separately (missing={snap['missing']}, "
       f"unsupported={snap['unsupported']}, failed={snap['failed']})")
 
-# 4. Games RetroAchievements has no data for, through _prepare_one with the
+# 4. The patch row for Flycast, through _prepare_one with a stubbed network.
+class Hashes:
+    available = True
+    error = None
+
+    @staticmethod
+    def console_id(system):
+        return 40 if system == "DC" else 4
+
+    def hash_rom(self, path, system):
+        return HashResult("dc0123456789abcdef0123456789abcd" if system == "DC"
+                          else "5e0123456789abcdef0123456789abcd")
+
+
+store_dir = WORK / "store"
+store_dir.mkdir()
+server = types.SimpleNamespace(storage=Storage(store_dir / "proxy.sqlite3"), config_data={})
+job = leaf_precache.PrecacheJob(server)
+job._hasher = Hashes()
+calls = []
+
+
+def fake_sets(rom_hash, credentials, user_agent, config, storage, cache_images=True):
+    calls.append(("achievementsets", rom_hash))
+    body = json.dumps({"Success": True, "GameId": 3417 if rom_hash.startswith("dc") else 77,
+                       "Sets": [{}]})
+    storage.upsert_cache(cache_keys.achievementsets(rom_hash, credentials["user"]), body)
+    return body
+
+
+def fake_patch(game_id, credentials, user_agent, storage, config, cache_images=True):
+    calls.append(("patch", game_id))
+    storage.upsert_cache(cache_keys.patch(game_id, credentials["user"]), '{"Success":true}')
+    return '{"Success":true}'
+
+
+stubs = [
+    mock.patch.object(leaf_precache, "cache_achievementsets", fake_sets),
+    mock.patch.object(leaf_precache, "refresh_game_patch", fake_patch),
+    mock.patch.object(leaf_precache, "cache_unlocks", lambda *a, **k: calls.append(("unlocks",))),
+    mock.patch.object(leaf_precache, "cache_session", lambda *a, **k: calls.append(("session",))),
+    mock.patch.object(leaf_precache.time, "sleep", lambda s: None),
+]
+for stub in stubs:
+    stub.start()
+with LibraryReader(db_path, primary_root=card) as lib:
+    dc_game, scd_game = lib.game_by_id(1), lib.game_by_id(4)
+    calls.clear()
+    first = job._prepare_one(dc_game, creds, "ua")
+    check(first.status == "cached" and ("patch", 3417) in calls,
+          "Dreamcast preparation stores the patch row Flycast loads")
+    calls.clear()
+    again = job._prepare_one(dc_game, creds, "ua")
+    check(again.status == "skipped" and not calls, "a fully prepared Dreamcast game is skipped")
+    server.storage.delete_cache(cache_keys.patch(3417, "synth"))
+    calls.clear()
+    redo = job._prepare_one(dc_game, creds, "ua")
+    check(redo.status == "cached" and ("patch", 3417) in calls,
+          "a Dreamcast game prepared without its patch row is prepared again")
+    calls.clear()
+    other = job._prepare_one(scd_game, creds, "ua")
+    check(other.status == "cached" and not any(c[0] == "patch" for c in calls),
+          "other systems do not fetch patch")
+    server.storage.delete_cache(cache_keys.patch(3417, "synth"))
+    with mock.patch.object(leaf_precache, "refresh_game_patch",
+                           side_effect=CacheGameError("patch request failed: timed out")):
+        failed = job._prepare_one(dc_game, creds, "ua")
+    check(failed.status == "failed" and "patch" in failed.detail,
+          "a patch failure is a failure, retried on the next run")
+for stub in stubs:
+    stub.stop()
+
+# 5. Games RetroAchievements has no data for, through _prepare_one with the
 # real achievementsets fetch and failure classification: only urlopen is
 # replaced, so http_get's own status handling decides what the job sees.
 import email.message  # noqa: E402
@@ -243,10 +322,19 @@ bad_token = ("http", 401, {"Success": False, "Error": "Invalid token.",
 known = ("json", {"Success": True, "GameId": 77, "Sets": [{}]})
 later_calls = []
 
+
+
+def fake_patch_row(game_id, credentials, user_agent, storage, config, cache_images=True):
+    later_calls.append(("patch",))
+    storage.upsert_cache(cache_keys.patch(game_id, credentials["user"]), '{"Success":true}')
+
+
 net_stubs = [
     mock.patch.object(network, "configured_ssl_context", lambda: None),
     mock.patch.object(network._request_throttle, "wait", lambda *a, **k: None),
     mock.patch.object(leaf_precache.time, "sleep", lambda s: None),
+    # A known Dreamcast game also fetches (and stores) its patch row.
+    mock.patch.object(leaf_precache, "refresh_game_patch", fake_patch_row),
     mock.patch.object(leaf_precache, "cache_unlocks",
                       lambda *a, **k: later_calls.append(("unlocks",))),
     mock.patch.object(leaf_precache, "cache_session",
@@ -286,8 +374,10 @@ def prepare(job_, game, *answers):
 
 
 def no_rows_for(srv, rom_hash: str) -> bool:
-    """Nothing a launch reads beyond RA's own answer: no game id mapping."""
-    return srv.storage.get_cache(cache_keys.game_id(rom_hash)) is None
+    """Nothing a launch reads beyond RA's own answer: no game id mapping, and
+    no ``patch`` row for Flycast to load a game RetroAchievements lacks."""
+    return (srv.storage.get_cache(cache_keys.game_id(rom_hash)) is None
+            and not srv.storage.get_all_cache_by_prefix(cache_keys.PREFIX_PATCH))
 
 
 with LibraryReader(db_path, primary_root=card) as lib:
@@ -340,6 +430,9 @@ for game in nodata_games:
     retry, asked = prepare(job_, game, known)
     check(retry.status == "cached" and asked == ["achievementsets"],
           f"{label}: and the next run asks again and prepares it ({retry.status})")
+    wants_patch = game.system in leaf_precache.PATCH_CLIENT_SYSTEMS
+    check((("patch",) in later_calls) == wants_patch,
+          f"{label}: {'fetches' if wants_patch else 'does not fetch'} the patch row once known")
     third, asked = prepare(job_, game)
     check(third.status == "skipped" and asked == [],
           f"{label}: a game RetroAchievements does know stays 'already cached' "

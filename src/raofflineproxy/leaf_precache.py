@@ -9,7 +9,8 @@ offline launch is an ordinary cache hit and the proxy needs no special case.
 Three things shape the design, and none is arbitrary:
 
 **Politeness is a correctness constraint, not a nicety.** Pre-caching costs
-three API calls per game against a free community service. The qualification
+three API calls per game (four for a Dreamcast game, see
+PATCH_CLIENT_SYSTEMS) against a free community service. The qualification
 device holds 1,968 games, so a "cache everything" sweep would be over an hour
 of continuous requests -- an invitation to throttle or block the pak's user
 agent, which would break the feature for every user. The job therefore paces
@@ -43,7 +44,14 @@ from pathlib import Path
 from . import cache_keys
 from .config import FALLBACK_USER_AGENT
 from .leaf_romhash import RomHasher
-from .rom_cache import cache_achievementsets, cache_session, cache_unlocks
+from .rom_cache import (
+    CacheGameAuthError,
+    CacheGameError,
+    cache_achievementsets,
+    cache_session,
+    cache_unlocks,
+    refresh_game_patch,
+)
 
 LOGGER = logging.getLogger("raofflineproxy")
 
@@ -64,6 +72,13 @@ INTER_CALL_SECONDS = 0.2
 #: it every re-run re-asks the same question and spends the pacing budget
 #: learning nothing.
 UNKNOWN_ROM_TTL_SECONDS = 30 * 24 * 3600
+
+#: Systems with an emulator that loads a game through the older ``patch``
+#: request instead of ``achievementsets``: standalone Flycast v2.7 bundles
+#: rcheevos 11.6 and asks ``gameid`` then ``patch``. Offline, the proxy answers
+#: ``patch`` only from a ``patch:`` row, so without one a prepared Dreamcast
+#: game reads as prepared and then loads no achievements in Flycast.
+PATCH_CLIENT_SYSTEMS = frozenset({"DC"})
 
 #: A disc sheet line naming a track file: GDI ``N LBA TYPE SIZE FILE OFFSET``
 #: (FILE quoted when it has spaces) and CUE ``FILE "name" TYPE``.
@@ -268,7 +283,7 @@ class PrecacheJob:
         base.rom_hash = result.hash
 
         user = credentials["user"]
-        if self._already_cached(result.hash, user):
+        if self._already_cached(result.hash, user, game.system):
             base.status = "skipped"
             base.detail = "already cached"
             return base
@@ -332,6 +347,20 @@ class PrecacheJob:
             json.dumps({"Success": True, "GameID": ra_game_id}, separators=(",", ":")),
         )
 
+        if game.system.upper() in PATCH_CLIENT_SYSTEMS:
+            time.sleep(INTER_CALL_SECONDS)
+            try:
+                refresh_game_patch(
+                    ra_game_id, credentials, user_agent, self._server.storage,
+                    self._server.config_data, cache_images=self._cache_images(),
+                )
+            except CacheGameAuthError as exc:
+                base.detail = f"auth: {exc}"
+                return base
+            except CacheGameError as exc:
+                base.detail = str(exc)
+                return base
+
         time.sleep(INTER_CALL_SECONDS)
         cache_unlocks(
             ra_game_id, credentials, user_agent, self._server.config_data,
@@ -345,11 +374,13 @@ class PrecacheJob:
         return base
 
     # -- helpers ---------------------------------------------------------
-    def _already_cached(self, rom_hash: str, user: str) -> bool:
+    def _already_cached(self, rom_hash: str, user: str, system: str = "") -> bool:
         """True when a previous run (or a real launch) already covered this.
 
         Keyed on the cache itself rather than a progress file, so an
         interrupted run resumes correctly even if the file is lost or stale.
+        A ``patch`` system also needs its ``patch:`` row, so a game prepared
+        before that row was fetched is prepared again rather than skipped.
         """
         storage = self._server.storage
         sets = storage.get_cache(cache_keys.achievementsets(rom_hash, user))
@@ -361,7 +392,16 @@ class PrecacheJob:
             sets_game_id = int(json.loads(sets["responseBody"]).get("GameId") or 0)
         except (AttributeError, TypeError, ValueError):
             sets_game_id = 0
-        return sets_game_id > 0
+        if sets_game_id <= 0:
+            return False
+        if system.upper() not in PATCH_CLIENT_SYSTEMS:
+            return True
+        entry = storage.get_cache(cache_keys.game_id(rom_hash))
+        try:
+            ra_game_id = int(json.loads(entry["responseBody"]).get("GameID") or 0) if entry else 0
+        except (AttributeError, TypeError, ValueError):
+            ra_game_id = 0
+        return ra_game_id > 0 and storage.get_cache(cache_keys.patch(ra_game_id, user)) is not None
 
     def _classify_failure(
         self, rom_hash: str, credentials: dict, user_agent: str
