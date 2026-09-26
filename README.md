@@ -4,12 +4,12 @@ Leaf managed-service pak packaging [misantronic/RAOfflineProxy](https://github.c
 for the Miniloong Pocket 1 (MLP1), per
 `umrk-workspace/plans/RAOfflineProxy/README.md`.
 
-**Status:** 0.1.0 (real) and 0.0.1 (inert floor) are published in the Pak Rat
-catalog, both immutable. The source now carries the 0.1.1 candidate: the
-refreshed upstream pin plus the patch data bundled standalone Flycast loads
-offline, gated to Leaf/Jawaka `0.12.0`. The published 0.1.0 row keeps its
-`0.10.0` minimum, so older Leaf releases keep being offered 0.1.0. A version is
-published only by a deliberate tag and catalog change, never from this README.
+**Status:** 0.1.1 and 0.1.0 (real) and 0.0.1 (inert floor) are published in
+the Pak Rat catalog, all immutable. 0.1.1 is the refreshed upstream pin plus the
+patch data bundled standalone Flycast loads offline, gated to Leaf/Jawaka
+`0.12.0`. The 0.1.0 row keeps its `0.10.0` minimum, so older Leaf releases keep
+being offered 0.1.0. A version is published only by a deliberate tag and catalog
+change, never from this README.
 
 ## Layout
 
