@@ -13,7 +13,7 @@ touches leaf-docs or the production catalog; the production storefront is read
 only to prove this app id is not already published.
 
   python3 scripts/build-catalog-fixture.py                 # disposable 99.99.99
-  python3 scripts/build-catalog-fixture.py --min-leaf-version 0.10.0 --allow-real-minimum
+  python3 scripts/build-catalog-fixture.py --min-leaf-version 0.12.0 --allow-real-minimum
 """
 
 from __future__ import annotations

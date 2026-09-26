@@ -6,14 +6,15 @@ for the Miniloong Pocket 1 (MLP1), per
 
 **Status:** 0.1.0 (real) and 0.0.1 (inert floor) are published in the Pak Rat
 catalog, both immutable. The source now carries the 0.1.1 candidate: the
-refreshed upstream pin, with the same minimum Leaf/Jawaka `0.10.0` the 0.1.0
-row publishes. A version is published only by a deliberate tag and catalog
-change, never from this README.
+refreshed upstream pin plus the patch data bundled standalone Flycast loads
+offline, gated to Leaf/Jawaka `0.12.0`. The published 0.1.0 row keeps its
+`0.10.0` minimum, so older Leaf releases keep being offered 0.1.0. A version is
+published only by a deliberate tag and catalog change, never from this README.
 
 ## Layout
 
 - `release-lock.json` — pak-level pin: versions, minimum Leaf/Jawaka floor
-  (`0.10.0`), toolchain image digest, sibling commits. `pak.json` and
+  (`0.12.0`), toolchain image digest, sibling commits. `pak.json` and
   `floor/requirements/` carry the same pair; `make test-version-metadata`
   fails when any copy disagrees.
 - `locks/upstream.lock.json` — upstream tag/commit/archive hash plus the
