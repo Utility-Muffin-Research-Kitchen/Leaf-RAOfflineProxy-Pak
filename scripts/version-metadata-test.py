@@ -30,6 +30,8 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 VERSION = re.compile(r"\b\d+\.\d+\.\d+\b")
+# Paths that cannot reach the package: Markdown, docs/, CI and host test scripts.
+RELEASE_NEUTRAL = re.compile(r"(.*\.md|docs/.*|\.github/.*|scripts/[^/]*-test\.(py|sh))$")
 
 failures: list[str] = []
 
@@ -87,8 +89,18 @@ else:
     here = {tag.strip() for tag in (git("tag", "--points-at", "HEAD") or "").splitlines()}
     wanted = f"v{lock['pak_version']}"
     check("v0.1.0" in tagged, "the published v0.1.0 tag is visible (CI must fetch tags)")
-    check(wanted not in tagged or wanted in here,
-          f"{wanted} is not already published from another commit")
+    # A published version is immutable, so anything that can change its package
+    # needs a new version. Files that never reach the ZIP can still follow the
+    # release: documentation (the README records that it shipped), CI, and the
+    # host tests, including this one.
+    after_tag = []
+    if wanted in tagged and wanted not in here:
+        changed = git("diff", "--name-only", f"{wanted}^{{commit}}", "HEAD")
+        after_tag = [path for path in (changed if changed is not None else "?").split()
+                     if not RELEASE_NEUTRAL.match(path)]
+    check(not after_tag,
+          f"{wanted} is not already published from another commit "
+          f"(only docs, CI and host tests may change after its tag) {after_tag[:5]}")
 
 if failures:
     print(f"\n{len(failures)} failure(s)")
