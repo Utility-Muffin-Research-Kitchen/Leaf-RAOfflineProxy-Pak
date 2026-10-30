@@ -109,8 +109,8 @@ static bool raop_service_ready(void) {
 }
 
 /* Pull an "error" string out of a control response so the UI can show the
- * service's own words. Refusals here are meaningful -- "no cached token",
- * "already running", "schema is version 7" -- and paraphrasing them in the UI
+ * service's own words. Refusals here are meaningful -- no token yet, a run
+ * already going, "schema is version 7" -- and paraphrasing them in the UI
  * would mean maintaining two descriptions of the same condition. */
 static void raop_copy_error(const char *body, char *out, size_t out_size) {
     snprintf(out, out_size, "The service rejected the request.");
@@ -889,9 +889,10 @@ static void raop_screen_main(void) {
         } else {
             raop_message(
                 "Experimental, casual-only offline RetroAchievements.\n\n"
-                "Sign in under Leaf Settings > Accounts, launch one game online "
-                "so the pak learns your token, then start the service from the "
-                "Service row and turn on Start with Leaf.\n\n"
+                "Sign in under Settings > Games > Accounts and turn off Hardcore "
+                "Mode in RetroArch. Start the service from the Service row and "
+                "turn on Start with Leaf, then launch a RetroArch game online so "
+                "the pak learns your token.\n\n"
                 "Preparing a game downloads its achievement data now so it can "
                 "be played offline later. Hardcore play always launches "
                 "directly, unproxied.");

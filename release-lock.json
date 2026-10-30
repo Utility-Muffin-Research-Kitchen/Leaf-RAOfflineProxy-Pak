@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "product": "leaf-raofflineproxy-pak",
-  "status": "0.1.1-candidate",
-  "pak_version": "0.1.1",
+  "status": "0.1.2-candidate",
+  "pak_version": "0.1.2",
   "floor_version": "0.0.1",
   "min_leaf_version": "0.12.0",
   "min_jawaka_version": "0.12.0",
