@@ -191,12 +191,23 @@ class PrecacheJob:
 
             credentials = self._server.storage.load_login_credentials()
             if credentials is None:
+                # The token only arrives through a proxied launch, and Jawaka
+                # launches directly while Hardcore is on, which is RetroArch's
+                # default. Online achievements still work then, so "launch a
+                # game online" alone sends the user round in a circle. The UI
+                # shows this verbatim from a 256-byte buffer.
                 return False, (
-                    "no cached RetroAchievements token; sign in and launch one "
-                    "game online first"
+                    "No RetroAchievements token yet.\n\n"
+                    "Turn off Hardcore Mode in MENU > RetroArch Settings > "
+                    "Settings > Achievements. Then, with this service on, launch "
+                    "a RetroArch game online once."
                 )
             if self._server.storage.is_token_invalid(credentials["token"]):
-                return False, "the cached RetroAchievements token was rejected; play online once to refresh it"
+                return False, (
+                    "RetroAchievements rejected the saved token.\n\n"
+                    "With Hardcore Mode off and this service on, launch a "
+                    "RetroArch game online once to refresh it."
+                )
 
             self._cancel.clear()
             self._progress = PrecacheProgress(

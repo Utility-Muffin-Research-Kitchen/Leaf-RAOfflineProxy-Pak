@@ -187,6 +187,20 @@ check(snap["missing"] == 3 and snap["unsupported"] == 1 and snap["failed"] == 0,
       f"status counts missing separately (missing={snap['missing']}, "
       f"unsupported={snap['unsupported']}, failed={snap['failed']})")
 
+# The refusals are the user's only setup help, and the UI copies them into a
+# 256-byte buffer: they must name Hardcore, which keeps launches off the proxy
+# while online achievements still work, and must arrive whole.
+for login, rejected, what in ((None, False, "no token"),
+                              ({"user": "u", "token": "t"}, True, "rejected token")):
+    refusing = leaf_precache.PrecacheJob(types.SimpleNamespace(storage=types.SimpleNamespace(
+        load_login_credentials=lambda login=login: login,
+        is_token_invalid=lambda token, rejected=rejected: rejected,
+    ), config_data={}))
+    started, message = refusing.start([object()], "x")
+    check(not started and "Hardcore Mode" in message and "RetroArch game" in message,
+          f"the {what} refusal names Hardcore and a RetroArch launch")
+    check(len(message.encode("utf-8")) < 256, f"the {what} refusal fits the UI's buffer")
+
 # 4. The patch row for Flycast, through _prepare_one with a stubbed network.
 class Hashes:
     available = True

@@ -8,8 +8,10 @@ for the Miniloong Pocket 1 (MLP1), per
 the Pak Rat catalog, all immutable. 0.1.1 is the refreshed upstream pin plus the
 patch data bundled standalone Flycast loads offline, gated to Leaf/Jawaka
 `0.12.0`. The 0.1.0 row keeps its `0.10.0` minimum, so older Leaf releases keep
-being offered 0.1.0. A version is published only by a deliberate tag and catalog
-change, never from this README.
+being offered 0.1.0. 0.1.2 is an unpublished candidate that corrects the setup
+wording in the pak (Hardcore off and the service on before the first online
+launch), with the same `0.12.0` gate. A version is published only by a deliberate
+tag and catalog change, never from this README.
 
 ## Layout
 
