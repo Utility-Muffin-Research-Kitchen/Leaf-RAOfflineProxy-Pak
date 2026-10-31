@@ -49,6 +49,12 @@ LIBRARY_SCHEMA_VERSION = 6
 #: pre-cache action that reports the library as busy.
 BUSY_TIMEOUT_SECONDS = 2.0
 
+#: Rows of a second card that isn't in the slot, which Leaf keeps for when that
+#: card returns. Their ``rom_path`` is ``/.leaf-parked/card-<n>/<relpath>`` and no
+#: file exists there. The launcher lists none of them, so the picker and the bulk
+#: set don't either; the launcher can also hold several copies of one game this way.
+NOT_PARKED_SQL = "rom_path NOT LIKE '/.leaf-parked/%'"
+
 #: Jawaka's key for a user's own console rename, in ``system_settings``.
 SYSTEM_DISPLAY_NAME_KEY = "display_name"
 
@@ -259,7 +265,7 @@ class LibraryReader:
             raise LibraryUnavailable(f"game library read failed: {exc}") from exc
 
     def game_count(self) -> int:
-        return int(self._query("SELECT count(*) AS n FROM games")[0]["n"])
+        return int(self._query(f"SELECT count(*) AS n FROM games WHERE {NOT_PARKED_SQL}")[0]["n"])
 
     def recents_and_favourites(self) -> list[LibraryGame]:
         """The bulk pre-cache set: everything recent or favourited.
@@ -273,7 +279,7 @@ class LibraryReader:
         than being dropped.
         """
         rows = self._query(
-            """
+            f"""
             SELECT g.id, g.name, g.system, g.rom_path,
                    MAX(r.last_opened) AS last_opened,
                    MAX(CASE WHEN r.target_id IS NOT NULL THEN 1 ELSE 0 END) AS is_recent,
@@ -281,7 +287,8 @@ class LibraryReader:
               FROM games g
               LEFT JOIN recents   r ON r.kind = 'game' AND r.target_id = g.id
               LEFT JOIN favorites f ON f.kind = 'game' AND f.target_id = g.id
-             WHERE r.target_id IS NOT NULL OR f.target_id IS NOT NULL
+             WHERE (r.target_id IS NOT NULL OR f.target_id IS NOT NULL)
+               AND {NOT_PARKED_SQL}
              GROUP BY g.id
              ORDER BY last_opened IS NULL, last_opened DESC, g.name COLLATE NOCASE
             """
@@ -297,9 +304,10 @@ class LibraryReader:
         presents the same library.
         """
         rows = self._query(
-            """
+            f"""
             SELECT system, count(*) AS n
               FROM games
+             WHERE {NOT_PARKED_SQL}
              GROUP BY system
              ORDER BY n DESC, system COLLATE NOCASE
             """
@@ -321,7 +329,7 @@ class LibraryReader:
         This is a picker source, not a bulk pre-cache set: the caller still
         sends one game at a time. See the plan's rate-limit note.
         """
-        where = []
+        where = [NOT_PARKED_SQL]
         params: list = []
         if system:
             where.append("system = ? COLLATE NOCASE")
@@ -337,8 +345,7 @@ class LibraryReader:
             "SELECT id, name, system, rom_path, NULL AS last_opened, "
             "0 AS is_recent, 0 AS is_favourite FROM games"
         )
-        if where:
-            sql += " WHERE " + " AND ".join(where)
+        sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY system COLLATE NOCASE, name COLLATE NOCASE"
         if limit > 0:
             sql += " LIMIT ?"

@@ -100,9 +100,13 @@ db.executemany("INSERT INTO games VALUES (?, ?, ?, ?)", [
     (4, "Game", "SEGACD", "Roms/SEGACD/Game.cue"),
     (5, "NoBin", "SEGACD", "Roms/SEGACD/NoBin.cue"),
     (6, "Gone", "DC", "Roms/DC/Gone.chd"),
+    # The same game on a second card that isn't in the slot, plus a system only it has.
+    (7, "Primary", "DC", "/.leaf-parked/card-1/DC/Primary.gdi"),
+    (8, "Only parked", "GB", "/.leaf-parked/card-1/GB/Only.gb"),
 ])
-db.executemany("INSERT INTO recents VALUES ('game', ?, ?)", [(1, 200), (3, 100)])
+db.executemany("INSERT INTO recents VALUES ('game', ?, ?)", [(1, 200), (3, 100), (7, 300)])
 db.execute("INSERT INTO favorites VALUES ('game', 2)")
+db.execute("INSERT INTO favorites VALUES ('game', 8)")
 db.commit()
 db.close()
 
@@ -124,6 +128,20 @@ with LibraryReader(db_path) as lib:
     recents = lib.recents_and_favourites()
 check([g.game_id for g in recents] == [1, 3, 2] and all(g.rom_path.startswith("/") for g in recents),
       "recents and favourites carry resolved paths")
+
+# Parked rows belong to a card that isn't in the slot, so only a direct lookup finds them.
+with LibraryReader(db_path, primary_root=card) as lib:
+    check(lib.game_count() == 6, "parked rows aren't counted")
+    check({g.game_id for g in lib.all_games()} == {1, 2, 3, 4, 5, 6},
+          "the picker leaves parked rows out")
+    check([g.game_id for g in lib.all_games(query="Primary")] == [1],
+          "a picker search leaves out a parked copy of the same game")
+    check(lib.all_games(system="GB") == [], "a parked-only system has no picker rows")
+    check({s[0]: s[2] for s in lib.systems()} == {"DC": 4, "SEGACD": 2},
+          "the system counts leave parked rows out")
+    parked = lib.game_by_id(7)
+    check(parked is not None and not parked.exists,
+          "a stale request for a parked row finds it, and it reads as missing")
 
 # 2. Disc sheets.
 check(leaf_precache.missing_disc_files(str(dc / "Primary.gdi")) == [],
